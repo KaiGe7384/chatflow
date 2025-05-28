@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IM通讯系统 - 连接测试</title>
+  <style>
+    body {
+      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      line-height: 1.6;
+      margin: 0;
+      padding: 20px;
+      background-color: #f8f9fa;
+      color: #333;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #d53f8c;
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .test-section {
+      margin-bottom: 20px;
+      padding: 15px;
+      border-radius: 6px;
+      background-color: #fef5f9;
+    }
+    .test-title {
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #d53f8c;
+    }
+    .test-output {
+      background-color: #f8f8f8;
+      padding: 12px;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      min-height: 50px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .success {
+      color: #0c9e6e;
+    }
+    .error {
+      color: #e53e3e;
+    }
+    .test-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+    }
+    button {
+      background-color: #d53f8c;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.2s;
+    }
+    button:hover {
+      background-color: #b83280;
+    }
+    button:disabled {
+      background-color: #fbb6ce;
+      cursor: not-allowed;
+    }
+    .status {
+      margin-top: 20px;
+      padding: 10px;
+      border-radius: 4px;
+      text-align: center;
+    }
+    .status-error {
+      background-color: #fed7d7;
+      color: #e53e3e;
+    }
+    .status-success {
+      background-color: #c6f6d5;
+      color: #38a169;
+    }
+    .help {
+      margin-top: 30px;
+      padding: 15px;
+      background-color: #e6f7ff;
+      border-radius: 6px;
+    }
+    .help h3 {
+      margin-top: 0;
+      color: #0070f3;
+    }
+    .help ul {
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>IM通讯系统 - 连接测试工具</h1>
+    
+    <div class="test-section">
+      <div class="test-title">HTTP API 连接测试</div>
+      <div class="test-output" id="api-output">准备就绪，点击"测试API连接"按钮开始测试...</div>
+      <div class="test-buttons">
+        <button id="test-api">测试API连接</button>
+      </div>
+    </div>
+    
+    <div class="test-section">
+      <div class="test-title">WebSocket 连接测试</div>
+      <div class="test-output" id="ws-output">准备就绪，点击"测试WebSocket连接"按钮开始测试...</div>
+      <div class="test-buttons">
+        <button id="test-ws">测试WebSocket连接</button>
+      </div>
+    </div>
+    
+    <div class="test-section">
+      <div class="test-title">Socket.io 连接测试</div>
+      <div class="test-output" id="socketio-output">准备就绪，点击"测试Socket.io连接"按钮开始测试...</div>
+      <div class="test-buttons">
+        <button id="test-socketio">测试Socket.io连接</button>
+      </div>
+    </div>
+    
+    <div id="status" class="status"></div>
+    
+    <div class="help">
+      <h3>连接问题解决方案</h3>
+      <ul>
+        <li>确保服务器正在运行 (<code>node server/index.js</code>)</li>
+        <li>确认端口5000未被其他程序占用</li>
+        <li>检查防火墙是否允许WebSocket连接</li>
+        <li>尝试重新启动服务器</li>
+        <li>刷新浏览器页面</li>
+      </ul>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+  <script>
+    // API 连接测试
+    document.getElementById('test-api').addEventListener('click', async function() {
+      const outputEl = document.getElementById('api-output');
+      outputEl.innerHTML = '正在测试API连接...\n';
+      
+      try {
+        const response = await fetch('http://localhost:5001/api/rooms');
+        
+        if (response.ok) {
+          const data = await response.json();
+          outputEl.innerHTML += `✅ API连接成功! 获取到 ${data.length} 个房间信息\n`;
+          outputEl.innerHTML += `状态码: ${response.status}\n`;
+          outputEl.innerHTML += `返回数据: ${JSON.stringify(data, null, 2)}\n`;
+          updateStatus(true, 'API连接成功');
+        } else {
+          outputEl.innerHTML += `❌ API返回错误: ${response.status} ${response.statusText}\n`;
+          updateStatus(false, `API连接失败: ${response.status} ${response.statusText}`);
+        }
+      } catch (error) {
+        outputEl.innerHTML += `❌ API连接失败: ${error.message}\n`;
+        outputEl.innerHTML += '可能的原因:\n';
+        outputEl.innerHTML += '1. 服务器未运行\n';
+        outputEl.innerHTML += '2. 服务器端口不是5000\n';
+        outputEl.innerHTML += '3. 跨域请求被阻止\n';
+        updateStatus(false, `API连接失败: ${error.message}`);
+      }
+    });
+    
+    // WebSocket 连接测试
+    document.getElementById('test-ws').addEventListener('click', function() {
+      const outputEl = document.getElementById('ws-output');
+      outputEl.innerHTML = '正在测试WebSocket连接...\n';
+      
+      try {
+        const socket = new WebSocket('ws://localhost:5001');
+        
+        socket.onopen = function() {
+          outputEl.innerHTML += '✅ WebSocket连接成功!\n';
+          socket.send('测试消息');
+          updateStatus(true, 'WebSocket连接成功');
+        };
+        
+        socket.onmessage = function(event) {
+          outputEl.innerHTML += `收到消息: ${event.data}\n`;
+        };
+        
+        socket.onerror = function(error) {
+          outputEl.innerHTML += `❌ WebSocket连接错误\n`;
+          updateStatus(false, 'WebSocket连接失败');
+        };
+        
+        socket.onclose = function() {
+          outputEl.innerHTML += '连接已关闭\n';
+        };
+        
+        // 5秒后关闭连接
+        setTimeout(function() {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.close();
+          }
+        }, 5000);
+        
+      } catch (error) {
+        outputEl.innerHTML += `❌ WebSocket连接失败: ${error.message}\n`;
+        updateStatus(false, `WebSocket连接失败: ${error.message}`);
+      }
+    });
+    
+    // Socket.io 连接测试
+    document.getElementById('test-socketio').addEventListener('click', function() {
+      const outputEl = document.getElementById('socketio-output');
+      outputEl.innerHTML = '正在测试Socket.io连接...\n';
+      
+      try {
+        const socket = io('http://localhost:5001', {
+          transports: ['websocket'],
+          timeout: 5000
+        });
+        
+        socket.on('connect', function() {
+          outputEl.innerHTML += `✅ Socket.io连接成功! SocketID: ${socket.id}\n`;
+          updateStatus(true, 'Socket.io连接成功');
+          
+          // 尝试加入用户
+          const testUser = {
+            id: 'test-' + Date.now(),
+            username: 'TestUser',
+            avatar: 'https://ui-avatars.com/api/?name=Test'
+          };
+          
+          socket.emit('user_join', testUser);
+          outputEl.innerHTML += '已发送用户加入事件\n';
+          
+          // 监听在线用户
+          socket.on('online_users', function(users) {
+            outputEl.innerHTML += `收到在线用户: ${users.length} 人\n`;
+            users.forEach(user => {
+              outputEl.innerHTML += `- ${user.username} (${user.id})\n`;
+            });
+          });
+        });
+        
+        socket.on('connect_error', function(error) {
+          outputEl.innerHTML += `❌ Socket.io连接错误: ${error.message}\n`;
+          updateStatus(false, `Socket.io连接错误: ${error.message}`);
+        });
+        
+        socket.on('disconnect', function(reason) {
+          outputEl.innerHTML += `断开连接: ${reason}\n`;
+        });
+        
+        // 10秒后断开连接
+        setTimeout(function() {
+          socket.disconnect();
+          outputEl.innerHTML += '测试完成，已断开连接\n';
+        }, 10000);
+        
+      } catch (error) {
+        outputEl.innerHTML += `❌ Socket.io连接失败: ${error.message}\n`;
+        updateStatus(false, `Socket.io连接失败: ${error.message}`);
+      }
+    });
+    
+    // 更新状态显示
+    function updateStatus(success, message) {
+      const statusEl = document.getElementById('status');
+      statusEl.className = success ? 'status status-success' : 'status status-error';
+      statusEl.innerHTML = message;
+    }
+  </script>
+</body>
+</html> 
