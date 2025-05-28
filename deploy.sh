@@ -310,8 +310,38 @@ install_basic_tools() {
     print_success "基础工具安装完成"
 }
 
+# 检测系统类型
+detect_system() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        VERSION=$VERSION_ID
+    else
+        print_error "无法检测系统类型"
+        exit 1
+    fi
+    
+    case $OS in
+        ubuntu|debian)
+            DISTRO="debian"
+            ;;
+        centos|rhel|rocky|almalinux)
+            DISTRO="rhel"
+            ;;
+        alpine)
+            DISTRO="alpine"
+            ;;
+        *)
+            print_warning "未明确支持的系统: $OS，尝试使用通用方法"
+            DISTRO="debian"
+            ;;
+    esac
+    
+    print_status "检测到系统: $OS $VERSION ($DISTRO)"
+}
+
 # 检查并安装依赖
-check_and_install_dependencies() {
+check_dependencies() {
     print_status "检查系统依赖..."
     
     # 检测操作系统
@@ -388,12 +418,21 @@ setup_project() {
 deploy_application() {
     print_status "开始部署应用..."
     
+    # 预防性清理PM2，避免EPIPE错误
+    print_status "清理PM2环境，避免EPIPE错误..."
+    pm2 kill 2>/dev/null || true
+    rm -rf ~/.pm2/logs/* 2>/dev/null || true
+    rm -rf ~/.pm2/pids/* 2>/dev/null || true
+    rm -rf /tmp/pm2-* 2>/dev/null || true
+    
+    # 重新初始化PM2
+    print_status "初始化PM2..."
+    pm2 ping >/dev/null 2>&1 || true
+    
     # 停止现有进程（如果存在）
-    if command -v pm2 &> /dev/null; then
-        print_status "停止现有服务..."
-        pm2 stop chatflow 2>/dev/null || true
-        pm2 delete chatflow 2>/dev/null || true
-    fi
+    print_status "停止现有服务..."
+    pm2 stop chatflow 2>/dev/null || true
+    pm2 delete chatflow 2>/dev/null || true
     
     # 安装项目依赖
     print_status "安装根目录依赖..."
@@ -443,12 +482,16 @@ module.exports = {
     watch: false,
     max_memory_restart: '1G',
     env: {
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      PORT: 5000
     },
     error_file: './logs/err.log',
     out_file: './logs/out.log',
     log_file: './logs/combined.log',
-    time: true
+    time: true,
+    kill_timeout: 5000,
+    wait_ready: true,
+    listen_timeout: 10000
   }]
 }
 EOF
@@ -477,67 +520,204 @@ EOF
         print_status "创建 package.json..."
         cat > package.json << EOF
 {
-  \"name\": \"chatflow\",
-  \"version\": \"1.0.0\",
-  \"description\": \"ChatFlow 即时通讯应用\",
-  \"scripts\": {
-    \"start\": \"pm2 start ecosystem.config.js\",
-    \"dev\": \"cd server && npm run dev\",
-    \"stop\": \"pm2 stop chatflow\",
-    \"restart\": \"pm2 restart chatflow\",
-    \"logs\": \"pm2 logs chatflow\"
+  "name": "chatflow",
+  "version": "1.0.0",
+  "description": "ChatFlow 即时通讯应用",
+  "scripts": {
+    "start": "pm2 start ecosystem.config.js",
+    "dev": "cd server && npm run dev",
+    "stop": "pm2 stop chatflow",
+    "restart": "pm2 restart chatflow",
+    "logs": "pm2 logs chatflow"
   },
-  \"keywords\": [\"chat\", \"socket.io\", \"react\"],
-  \"author\": \"KaiGe\",
-  \"license\": \"MIT\"
+  "keywords": ["chat", "socket.io", "react"],
+  "author": "KaiGe",
+  "license": "MIT"
 }
 EOF
+    fi
+    
+    # 确保服务器文件存在
+    if [ ! -f "server/index.js" ]; then
+        print_error "服务器文件 server/index.js 不存在，请检查项目完整性"
+        exit 1
+    fi
+    
+    # 检查端口是否被占用
+    print_status "检查端口5000状态..."
+    if netstat -tln 2>/dev/null | grep -q ":5000 "; then
+        print_warning "端口5000已被占用，尝试释放..."
+        # 找到并杀死占用5000端口的进程
+        local pid=$(lsof -ti:5000 2>/dev/null || true)
+        if [ -n "$pid" ]; then
+            kill -9 $pid 2>/dev/null || true
+            sleep 2
+        fi
     fi
     
     # 启动应用
     print_status "启动 ChatFlow 应用..."
     pm2 start ecosystem.config.js
-    pm2 save
     
-    # 等待服务启动
-    sleep 3
+    # 等待应用启动
+    print_status "等待应用启动..."
+    sleep 8
+    
+    # 验证应用是否正确启动
+    local retry_count=0
+    local max_retries=5
+    
+    while [ $retry_count -lt $max_retries ]; do
+        if pm2 list | grep -q "chatflow.*online"; then
+            break
+        fi
+        
+        print_warning "应用未正常启动，重试 $((retry_count + 1))/$max_retries..."
+        pm2 restart chatflow 2>/dev/null || pm2 start ecosystem.config.js
+        sleep 5
+        retry_count=$((retry_count + 1))
+    done
+    
+    # 保存PM2配置
+    pm2 save
     
     print_success "应用部署完成"
 }
 
-# 显示结果
-show_result() {
-    # 检查服务状态
-    if pm2 list | grep -q "chatflow.*online"; then
-        print_success "ChatFlow 部署成功！"
+# 显示应用信息
+show_application_info() {
+    local SERVER_IP=$(get_server_ip)
+    
+    echo ""
+    echo -e "${GREEN}🎉 ChatFlow 部署成功！${NC}"
+    echo ""
+    
+    # 测试应用连通性
+    print_status "测试应用连通性..."
+    
+    # 检查PM2状态
+    local pm2_status=$(pm2 list | grep "chatflow" | awk '{print $10}' 2>/dev/null || echo "unknown")
+    
+    # 检查端口监听
+    local port_listening=false
+    if netstat -tln 2>/dev/null | grep -q ":5000 "; then
+        port_listening=true
+    fi
+    
+    # 测试本地HTTP连接
+    local local_http=false
+    if curl -s --connect-timeout 5 http://localhost:5000 >/dev/null 2>&1; then
+        local_http=true
+    fi
+    
+    echo -e "${GREEN}系统状态:${NC}"
+    echo -e "  PM2应用状态: ${YELLOW}$pm2_status${NC}"
+    
+    if [ "$port_listening" = true ]; then
+        echo -e "  端口5000监听: ${GREEN}✓ 正常${NC}"
+    else
+        echo -e "  端口5000监听: ${RED}✗ 未监听${NC}"
+    fi
+    
+    if [ "$local_http" = true ]; then
+        echo -e "  HTTP连接测试: ${GREEN}✓ 正常${NC}"
+    else
+        echo -e "  HTTP连接测试: ${YELLOW}⚠ 可能需要等待${NC}"
+    fi
+    
+    echo ""
+    echo -e "${GREEN}访问信息:${NC}"
+    echo -e "  本地访问: ${YELLOW}http://localhost:5000${NC}"
+    echo -e "  外网访问: ${YELLOW}http://$SERVER_IP:5000${NC}"
+    echo -e "  API接口: ${YELLOW}http://$SERVER_IP:5000/api${NC}"
+    echo ""
+    
+    # 防火墙检查
+    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
+        print_warning "检测到UFW防火墙已启用"
+        echo -e "  如需外网访问，请运行: ${YELLOW}sudo ufw allow 5000${NC}"
+        echo ""
+    fi
+    
+    if command -v firewall-cmd &> /dev/null && firewall-cmd --state 2>/dev/null | grep -q "running"; then
+        print_warning "检测到firewalld防火墙正在运行"
+        echo -e "  如需外网访问，请运行: ${YELLOW}sudo firewall-cmd --permanent --add-port=5000/tcp && sudo firewall-cmd --reload${NC}"
+        echo ""
+    fi
+    
+    echo -e "${GREEN}管理命令:${NC}"
+    echo -e "  查看状态: ${YELLOW}cf status${NC} 或 ${YELLOW}pm2 status chatflow${NC}"
+    echo -e "  查看日志: ${YELLOW}cf logs${NC} 或 ${YELLOW}pm2 logs chatflow${NC}"
+    echo -e "  重启应用: ${YELLOW}cf restart${NC} 或 ${YELLOW}pm2 restart chatflow${NC}"
+    echo -e "  停止应用: ${YELLOW}cf stop${NC} 或 ${YELLOW}pm2 stop chatflow${NC}"
+    echo ""
+    
+    # 如果应用未正常运行，提供故障排除信息
+    if [ "$pm2_status" != "online" ] || [ "$port_listening" = false ]; then
+        echo -e "${YELLOW}故障排除:${NC}"
+        echo -e "  检查应用日志: ${YELLOW}pm2 logs chatflow --lines 50${NC}"
+        echo -e "  查看错误日志: ${YELLOW}cat logs/err.log${NC}"
+        echo -e "  检查端口占用: ${YELLOW}netstat -tlnp | grep 5000${NC}"
+        echo -e "  手动重启: ${YELLOW}pm2 restart chatflow${NC}"
+        echo ""
         
-        # 获取服务器IP地址
-        print_status "获取服务器IP地址..."
-        SERVER_IP=""
-        
-        # 尝试多种方法获取外网IP
-        if command -v curl &> /dev/null; then
-            SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || curl -s icanhazip.com 2>/dev/null)
+        # 显示最新日志
+        if [ -f "logs/err.log" ] && [ -s "logs/err.log" ]; then
+            print_warning "发现错误日志，最新10行："
+            tail -10 logs/err.log 2>/dev/null | sed 's/^/    /' || true
+            echo ""
         fi
-        
-        # 如果获取外网IP失败，获取内网IP
-        if [ -z "$SERVER_IP" ]; then
-            SERVER_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I | awk '{print $1}')
-        fi
-        
-        # 如果还是获取不到，使用localhost
-        if [ -z "$SERVER_IP" ]; then
-            SERVER_IP="localhost"
-        fi
-        
-        # 设置PM2开机自启动
-        print_status "设置开机自启动..."
-        pm2 startup systemd -u root --hp /root 2>/dev/null || pm2 startup 2>/dev/null || true
-        pm2 save
-        
-        # 创建自定义cf命令管理工具
-        print_status "创建自定义cf管理命令..."
-        cat > /usr/local/bin/cf << 'EOF'
+    fi
+    
+    echo -e "${GREEN}项目目录:${NC} $(pwd)"
+    echo -e "${GREEN}版本信息:${NC} ChatFlow v2.1.0"
+    echo ""
+    print_success "部署完成！请访问上述地址开始使用ChatFlow"
+}
+
+# 主函数
+main() {
+    print_header
+    
+    # 检查root权限
+    if [ "$EUID" -ne 0 ]; then
+        print_error "此脚本需要root权限运行"
+        print_status "请使用: sudo bash $0"
+        exit 1
+    fi
+    
+    # 获取项目目录
+    PROJECT_DIR="${PROJECT_DIR:-/root/chatflow}"
+    cd "$(dirname "$PROJECT_DIR")"
+    
+    print_status "开始部署 ChatFlow..."
+    
+    # 禁用交互式提示
+    disable_interactive_prompts
+    
+    # 检测系统类型
+    detect_system
+    
+    # 检查并安装依赖
+    check_dependencies
+    
+    # 克隆或更新项目
+    setup_project
+    
+    # 进入项目目录
+    cd "$PROJECT_DIR"
+    
+    # 部署应用
+    deploy_application
+    
+    # 设置PM2开机自启动
+    print_status "设置开机自启动..."
+    pm2 startup systemd -u root --hp /root 2>/dev/null || pm2 startup 2>/dev/null || true
+    pm2 save
+    
+    # 创建自定义cf命令管理工具
+    print_status "创建自定义cf管理命令..."
+    cat > /usr/local/bin/cf << 'EOF'
 #!/bin/bash
 
 # ChatFlow 管理命令工具
@@ -640,66 +820,15 @@ case "$1" in
         ;;
 esac
 EOF
-        
-        # 设置执行权限
-        chmod +x /usr/local/bin/cf
-        
-        print_success "自定义cf命令已创建"
-        
-        echo ""
-        echo -e "${GREEN}🎉 ChatFlow 部署配置完成！${NC}"
-        echo ""
-        echo -e "${GREEN}访问信息:${NC}"
-        echo -e "  应用地址: ${YELLOW}http://$SERVER_IP:5000${NC}"
-        echo -e "  API接口: ${YELLOW}http://$SERVER_IP:5000/api${NC}"
-        echo ""
-        echo -e "${GREEN}自定义管理命令 (cf):${NC}"
-        echo -e "  查看状态: ${YELLOW}cf status${NC}"
-        echo -e "  查看日志: ${YELLOW}cf logs${NC}"
-        echo -e "  重启应用: ${YELLOW}cf restart${NC}"
-        echo -e "  应用信息: ${YELLOW}cf info${NC}"
-        echo -e "  更多命令: ${YELLOW}cf help${NC}"
-        echo ""
-        echo -e "${GREEN}开机自启动: ${YELLOW}已设置 ✓${NC}"
-        echo ""
-        echo -e "${GREEN}默认测试账号:${NC}"
-        echo -e "  用户名: ${YELLOW}test1${NC} / 密码: ${YELLOW}123456${NC}"
-        echo -e "  用户名: ${YELLOW}test2${NC} / 密码: ${YELLOW}123456${NC}"
-        echo ""
-        echo -e "${GREEN}🚀 现在可以通过 http://$SERVER_IP:5000 访问您的 ChatFlow 应用！${NC}"
-        
-        # 测试cf命令
-        echo ""
-        print_status "测试cf命令..."
-        /usr/local/bin/cf info
-        
-    else
-        print_error "服务启动失败，请检查日志:"
-        pm2 logs chatflow --lines 20
-        exit 1
-    fi
-}
-
-# 主函数
-main() {
-    print_header
     
-    # 首先禁用所有交互式提示
-    disable_interactive_prompts
+    # 设置执行权限
+    chmod +x /usr/local/bin/cf
+    print_success "自定义cf命令已创建"
     
-    print_status "开始智能部署 ChatFlow..."
+    # 显示应用信息
+    show_application_info
     
-    # 检查并安装依赖
-    check_and_install_dependencies
-    
-    # 设置项目
-    setup_project
-    
-    # 部署应用
-    deploy_application
-    
-    # 显示结果
-    show_result
+    print_success "ChatFlow 部署流程全部完成！"
 }
 
 # 运行主函数
