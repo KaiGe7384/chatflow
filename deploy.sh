@@ -2,7 +2,7 @@
 
 # ChatFlow 一键部署脚本
 # Author: ChatFlow Team
-# Version: 1.1.0
+# Version: 2.0.0
 
 set -e
 
@@ -50,7 +50,7 @@ print_header() {
     echo " | |____| | | | (_| || | |    | | (_) \ V  V / "
     echo " |______|_| |_|\__,_||_|_|    |_|\___/ \_/\_/  "
     echo -e "${NC}"
-    echo -e "${CYAN}         ChatFlow 一键部署脚本 v1.1.0${NC}"
+    echo -e "${CYAN}         ChatFlow 一键部署脚本 v2.0.0${NC}"
     echo -e "${CYAN}         现代化即时通讯应用${NC}"
     echo ""
 }
@@ -59,6 +59,7 @@ print_header() {
 check_root() {
     if [ "$EUID" -ne 0 ]; then
         print_error "请使用root权限运行此脚本"
+        print_status "使用方法: sudo $0"
         exit 1
     fi
 }
@@ -68,11 +69,17 @@ detect_os() {
     if [ -f /etc/redhat-release ]; then
         OS="centos"
         PM="yum"
+        INSTALL_CMD="yum install -y"
     elif [ -f /etc/debian_version ]; then
         OS="debian"
         PM="apt"
+        INSTALL_CMD="apt install -y"
+    elif [ -f /etc/alpine-release ]; then
+        OS="alpine"
+        PM="apk"
+        INSTALL_CMD="apk add"
     else
-        print_error "不支持的操作系统，仅支持 CentOS/RHEL 和 Debian/Ubuntu"
+        print_error "不支持的操作系统，仅支持 CentOS/RHEL、Debian/Ubuntu 和 Alpine Linux"
         exit 1
     fi
     print_status "检测到操作系统: $OS"
@@ -84,17 +91,31 @@ install_dependencies() {
     
     if [ "$OS" = "centos" ]; then
         $PM update -y
-        $PM install -y curl wget git nginx sqlite python3 python3-pip
+        $INSTALL_CMD curl wget git nginx sqlite python3 python3-pip gcc gcc-c++ make
         # 安装Node.js 18
         curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-        $PM install -y nodejs
-    else
+        $INSTALL_CMD nodejs
+    elif [ "$OS" = "debian" ]; then
         $PM update -y
-        $PM install -y curl wget git nginx sqlite3 python3 python3-pip
+        $INSTALL_CMD curl wget git nginx sqlite3 python3 python3-pip build-essential
         # 安装Node.js 18
         curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-        $PM install -y nodejs
+        $INSTALL_CMD nodejs
+    elif [ "$OS" = "alpine" ]; then
+        $PM update
+        $INSTALL_CMD curl wget git nginx sqlite python3 py3-pip nodejs npm build-base
     fi
+    
+    # 验证Node.js安装
+    if ! command -v node &> /dev/null; then
+        print_error "Node.js 安装失败"
+        exit 1
+    fi
+    
+    NODE_VERSION=$(node -v)
+    NPM_VERSION=$(npm -v)
+    print_success "Node.js 版本: $NODE_VERSION"
+    print_success "npm 版本: $NPM_VERSION"
     
     # 安装PM2
     npm install -g pm2
@@ -127,9 +148,9 @@ download_source() {
     
     # 检查GitHub仓库地址是否已更新
     if [[ "$GITHUB_REPO" == *"KaiGe7384"* ]]; then
-        echo "✅ GitHub仓库地址已正确配置"
+        print_success "GitHub仓库地址已正确配置"
     else
-        echo "❌ 错误：请在脚本中更新GITHUB_REPO变量为您的实际GitHub仓库地址"
+        print_error "请在脚本中更新GITHUB_REPO变量为您的实际GitHub仓库地址"
         exit 1
     fi
     
@@ -216,7 +237,17 @@ EOF
 configure_nginx() {
     print_status "正在配置Nginx..."
     
-    cat > /etc/nginx/sites-available/$APP_NAME << EOF
+    # 创建Nginx配置目录
+    if [ "$OS" = "debian" ]; then
+        NGINX_SITES_DIR="/etc/nginx/sites-available"
+        NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
+        mkdir -p $NGINX_SITES_DIR $NGINX_ENABLED_DIR
+    else
+        NGINX_SITES_DIR="/etc/nginx/conf.d"
+        mkdir -p $NGINX_SITES_DIR
+    fi
+    
+    cat > $NGINX_SITES_DIR/$APP_NAME.conf << EOF
 server {
     listen 80;
     server_name _;
@@ -279,12 +310,8 @@ EOF
 
     # 启用站点
     if [ "$OS" = "debian" ]; then
-        ln -sf /etc/nginx/sites-available/$APP_NAME /etc/nginx/sites-enabled/
-        rm -f /etc/nginx/sites-enabled/default
-    else
-        # CentOS
-        mkdir -p /etc/nginx/conf.d
-        cp /etc/nginx/sites-available/$APP_NAME /etc/nginx/conf.d/$APP_NAME.conf
+        ln -sf $NGINX_SITES_DIR/$APP_NAME.conf $NGINX_ENABLED_DIR/
+        rm -f $NGINX_ENABLED_DIR/default
     fi
     
     # 测试Nginx配置
@@ -350,11 +377,14 @@ show_result() {
     echo -e "${CYAN}配置文件:${NC}"
     echo -e "  应用目录: ${YELLOW}$INSTALL_DIR${NC}"
     echo -e "  环境配置: ${YELLOW}$INSTALL_DIR/server/.env${NC}"
-    echo -e "  Nginx配置: ${YELLOW}/etc/nginx/sites-available/$APP_NAME${NC}"
+    echo -e "  Nginx配置: ${YELLOW}$NGINX_SITES_DIR/$APP_NAME.conf${NC}"
     echo -e "  日志目录: ${YELLOW}$INSTALL_DIR/logs${NC}"
     echo ""
+    echo -e "${GREEN}默认测试账号:${NC}"
+    echo -e "  用户名: ${YELLOW}test1${NC} / 密码: ${YELLOW}123456${NC}"
+    echo -e "  用户名: ${YELLOW}test2${NC} / 密码: ${YELLOW}123456${NC}"
+    echo ""
     echo -e "${GREEN}🎉 部署成功！请访问 http://$SERVER_IP 开始使用 ChatFlow！${NC}"
-    echo -e "${GREEN}📱 默认测试账号: test1/123456 和 test2/123456${NC}"
 }
 
 # 主函数
