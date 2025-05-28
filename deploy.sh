@@ -5,6 +5,45 @@
 
 set -e
 
+# 禁用所有交互式提示
+disable_interactive_prompts() {
+    # 强制设置非交互式模式
+    export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=a
+    export NEEDRESTART_SUSPEND=1
+    export UCF_FORCE_CONFFNEW=1
+    export UCF_FORCE_CONFFOLD=1
+    
+    # 创建needrestart配置目录
+    mkdir -p /etc/needrestart/conf.d/ 2>/dev/null || true
+    
+    # 禁用needrestart的所有交互式提示
+    cat > /etc/needrestart/conf.d/50local.conf 2>/dev/null << 'EOF' || true
+# 禁用所有交互式提示
+$nrconf{restart} = 'a';
+$nrconf{kernelhints} = 0;
+$nrconf{ucodehints} = 0;
+EOF
+    
+    # 设置debconf为非交互式
+    echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections 2>/dev/null || true
+    echo 'debconf debconf/priority select critical' | debconf-set-selections 2>/dev/null || true
+    
+    # 禁用库重启提示
+    echo 'libc6 libraries/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+    echo 'libssl1.1:amd64 libraries/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+    echo 'libssl3:amd64 libraries/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+    
+    # 禁用needrestart包的交互式提示
+    echo 'needrestart needrestart/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+    
+    # 禁用服务重启提示
+    echo 'dbus dbus/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+    echo 'systemd systemd/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+    
+    print_status "已禁用所有交互式提示"
+}
+
 # 颜色定义
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -68,14 +107,27 @@ detect_os() {
 cleanup_nodejs_conflicts() {
     if [ "$OS" = "debian" ]; then
         print_status "清理可能冲突的Node.js包..."
+        
+        # 强制设置非交互式模式
         export DEBIAN_FRONTEND=noninteractive
+        export NEEDRESTART_MODE=a
+        export NEEDRESTART_SUSPEND=1
+        export UCF_FORCE_CONFFNEW=1
+        
+        # 禁用所有交互式提示
+        echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections 2>/dev/null || true
+        echo 'libc6 libraries/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+        echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/50local.conf 2>/dev/null || true
+        
+        # 创建needrestart配置目录
+        mkdir -p /etc/needrestart/conf.d/ 2>/dev/null || true
         
         # 停止所有可能运行的Node.js进程
         pkill -f node 2>/dev/null || true
         
         # 清理冲突的包
-        apt remove --purge -y nodejs npm libnode-dev libnode72 node-gyp 2>/dev/null || true
-        apt autoremove -y 2>/dev/null || true
+        apt remove --purge -y -qq nodejs npm libnode-dev libnode72 node-gyp 2>/dev/null || true
+        apt autoremove -y -qq 2>/dev/null || true
         apt autoclean 2>/dev/null || true
         
         # 清理残留的配置文件
@@ -83,9 +135,8 @@ cleanup_nodejs_conflicts() {
         rm -rf /usr/share/keyrings/nodesource.gpg 2>/dev/null || true
         
         # 更新包列表
-        apt update
+        apt update -qq
         
-        unset DEBIAN_FRONTEND
         print_success "冲突包清理完成"
     fi
 }
@@ -104,20 +155,31 @@ check_root() {
 install_nodejs() {
     print_status "正在安装 Node.js..."
     
-    # 设置非交互式模式，避免弹窗
+    # 强制设置非交互式模式，避免任何弹窗
     export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=a
+    export NEEDRESTART_SUSPEND=1
+    export UCF_FORCE_CONFFNEW=1
+    export UCF_FORCE_CONFFOLD=1
+    
+    # 禁用所有交互式提示
+    echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections 2>/dev/null || true
+    echo 'libc6 libraries/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+    echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/50local.conf 2>/dev/null || true
+    
+    # 创建needrestart配置目录（如果不存在）
+    mkdir -p /etc/needrestart/conf.d/ 2>/dev/null || true
     
     if [ "$OS" = "debian" ]; then
         # Ubuntu/Debian - 使用更可靠的安装方法
-        apt update
+        apt update -qq
         
         # 方法1：尝试从官方仓库安装
-        if apt install -y nodejs npm; then
+        if apt install -y -qq --no-install-recommends nodejs npm; then
             NODE_VERSION=$(node -v 2>/dev/null || echo "v0.0.0")
             NODE_MAJOR=$(echo $NODE_VERSION | cut -d'.' -f1 | sed 's/v//')
             if [ "$NODE_MAJOR" -ge 16 ]; then
                 print_success "Node.js 从官方仓库安装成功: $NODE_VERSION"
-                unset DEBIAN_FRONTEND
                 return 0
             else
                 print_warning "官方仓库版本过低，尝试NodeSource仓库..."
@@ -132,17 +194,23 @@ install_nodejs() {
         # 清理可能冲突的包
         cleanup_nodejs_conflicts
         
+        # 重新设置非交互式模式（清理后可能被重置）
+        export DEBIAN_FRONTEND=noninteractive
+        export NEEDRESTART_MODE=a
+        export NEEDRESTART_SUSPEND=1
+        echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/50local.conf 2>/dev/null || true
+        
         # 下载并安装NodeSource仓库
         curl -fsSL https://deb.nodesource.com/setup_18.x -o nodesource_setup.sh
         bash nodesource_setup.sh
         
         # 强制安装，忽略冲突
         print_status "安装Node.js 18..."
-        apt install -y --fix-broken nodejs || {
+        apt install -y -qq --no-install-recommends nodejs || {
             print_warning "标准安装失败，尝试强制安装..."
             dpkg --configure -a
             apt install -y --fix-broken || true
-            apt install -y nodejs --force-yes 2>/dev/null || apt install -y nodejs
+            apt install -y -qq nodejs --force-yes 2>/dev/null || apt install -y nodejs
         }
         
     elif [ "$OS" = "centos" ]; then
@@ -167,9 +235,6 @@ install_nodejs() {
         nvm alias default 18
     fi
     
-    # 恢复交互式模式
-    unset DEBIAN_FRONTEND
-    
     # 验证安装
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v)
@@ -186,23 +251,25 @@ install_nodejs() {
 install_git() {
     print_status "正在安装 Git..."
     
-    # 设置非交互式模式，避免弹窗
+    # 强制设置非交互式模式，避免弹窗
     export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=a
+    export NEEDRESTART_SUSPEND=1
+    
+    # 禁用交互式提示
+    echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections 2>/dev/null || true
+    echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/50local.conf 2>/dev/null || true
     
     if [ "$OS" = "debian" ]; then
-        apt install -y git
+        apt install -y -qq --no-install-recommends git
     elif [ "$OS" = "centos" ]; then
         yum install -y git
     elif [ "$OS" = "alpine" ]; then
         apk add git
     else
         print_warning "请手动安装 Git"
-        unset DEBIAN_FRONTEND
         return 1
     fi
-    
-    # 恢复交互式模式
-    unset DEBIAN_FRONTEND
     
     print_success "Git 安装完成"
 }
@@ -211,20 +278,34 @@ install_git() {
 install_basic_tools() {
     print_status "正在安装基础工具..."
     
-    # 设置非交互式模式，避免弹窗
+    # 强制设置非交互式模式，避免弹窗
     export DEBIAN_FRONTEND=noninteractive
+    export NEEDRESTART_MODE=a
+    export NEEDRESTART_SUSPEND=1
+    export UCF_FORCE_CONFFNEW=1
+    
+    # 禁用needrestart服务重启提示
+    echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections 2>/dev/null || true
+    echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/50local.conf 2>/dev/null || true
     
     if [ "$OS" = "debian" ]; then
-        apt update
-        apt install -y curl wget openssl build-essential
+        # 禁用所有交互式提示
+        echo 'libc6 libraries/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+        echo 'libssl1.1:amd64 libraries/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+        
+        apt update -qq
+        apt install -y -qq --no-install-recommends curl wget openssl build-essential
+        
+        # 禁用needrestart包的交互式提示
+        if dpkg -l | grep -q needrestart; then
+            echo 'needrestart needrestart/restart-without-asking boolean true' | debconf-set-selections 2>/dev/null || true
+        fi
+        
     elif [ "$OS" = "centos" ]; then
         yum install -y curl wget openssl gcc gcc-c++ make
     elif [ "$OS" = "alpine" ]; then
         apk add curl wget openssl build-base
     fi
-    
-    # 恢复交互式模式
-    unset DEBIAN_FRONTEND
     
     print_success "基础工具安装完成"
 }
@@ -267,9 +348,13 @@ check_and_install_dependencies() {
     if ! command -v npm &> /dev/null; then
         print_warning "npm 未安装，正在安装..."
         if [ "$OS" = "debian" ]; then
+            # 强制设置非交互式模式
             export DEBIAN_FRONTEND=noninteractive
-            apt install -y npm
-            unset DEBIAN_FRONTEND
+            export NEEDRESTART_MODE=a
+            export NEEDRESTART_SUSPEND=1
+            echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/50local.conf 2>/dev/null || true
+            
+            apt install -y -qq --no-install-recommends npm
         elif [ "$OS" = "centos" ]; then
             yum install -y npm
         fi
@@ -418,6 +503,9 @@ show_result() {
 # 主函数
 main() {
     print_header
+    
+    # 首先禁用所有交互式提示
+    disable_interactive_prompts
     
     print_status "开始智能部署 ChatFlow..."
     
