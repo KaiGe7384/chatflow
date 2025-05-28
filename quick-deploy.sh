@@ -85,11 +85,11 @@ install_nodejs() {
     if [ "$OS" = "debian" ]; then
         # Ubuntu/Debian
         $SUDO apt update
-        curl -fsSL https://deb.nodesource.com/setup_18.x | $SUDO -E bash -
+        curl -fsSL https://deb.nodesource.com/setup_18.x | ${SUDO} bash -
         $SUDO $INSTALL_CMD nodejs
     elif [ "$OS" = "centos" ]; then
         # CentOS/RHEL
-        curl -fsSL https://rpm.nodesource.com/setup_18.x | $SUDO bash -
+        curl -fsSL https://rpm.nodesource.com/setup_18.x | ${SUDO} bash -
         $SUDO $INSTALL_CMD nodejs npm
     elif [ "$OS" = "alpine" ]; then
         # Alpine Linux
