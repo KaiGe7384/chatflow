@@ -37,6 +37,7 @@ Thumbs.db
 # IDE 相关
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 
@@ -56,4 +57,17 @@ coverage/
 *.bak
 
 # 本地配置
-.local 
+.local
+
+# 清理的脚本和文档
+quick-deploy.sh
+temp-quick-deploy.sh
+chatflow-deploy-fixed.sh
+fix-pm2-error.sh
+upload-to-github.*
+check-deployment.sh
+start.js
+
+# Windows 相关
+*.bat
+desktop.ini 
