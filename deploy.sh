@@ -4,7 +4,7 @@
 # ChatFlow 一键部署脚本
 # 项目: ChatFlow 即时通讯应用
 # 作者: KaiGe
-# 版本: v2.4.0
+# 版本: v2.4.1
 # 更新时间: 2024-12-19
 #
 # 功能说明:
@@ -104,7 +104,7 @@ print_header() {
     echo " | |____| | | | (_| || | |    | | (_) \ V  V / "
     echo " |______|_| |_|\__,_||_|_|    |_|\___/ \_/\_/  "
     echo -e "${NC}"
-    echo -e "${GREEN}         ChatFlow 一键部署 v2.4.0${NC}"
+    echo -e "${GREEN}         ChatFlow 一键部署 v2.4.1${NC}"
     echo -e "${GREEN}         智能环境检测与安装${NC}"
     echo ""
 }
@@ -1171,22 +1171,37 @@ NC='\033[0m'
 find_chatflow_dir() {
     # 常见安装路径
     local possible_dirs=(
+        "/root/chatflow"
         "/opt/chatflow"
         "/var/www/chatflow"
         "/home/$(whoami)/chatflow"
+        "$(pwd)/chatflow"
         "$(pwd)"
     )
     
+    # 首先检查当前目录是否就是ChatFlow项目
+    if [ -f "$(pwd)/ecosystem.config.js" ] && [ -f "$(pwd)/server/index.js" ]; then
+        echo "$(pwd)"
+        return 0
+    fi
+    
     for dir in "${possible_dirs[@]}"; do
-        if [ -d "$dir" ] && [ -f "$dir/ecosystem.config.js" ]; then
+        if [ -d "$dir" ] && [ -f "$dir/ecosystem.config.js" ] && [ -f "$dir/server/index.js" ]; then
             echo "$dir"
             return 0
         fi
     done
     
-    # 如果都找不到，搜索整个系统
-    local found_dir=$(find /opt /var/www /home -name "ecosystem.config.js" -path "*/chatflow/*" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
-    if [ -n "$found_dir" ] && [ -f "$found_dir/ecosystem.config.js" ]; then
+    # 如果都找不到，搜索常见路径
+    local found_dir=$(find /root /opt /var/www /home -maxdepth 3 -name "ecosystem.config.js" -path "*/chatflow/*" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+    if [ -n "$found_dir" ] && [ -f "$found_dir/ecosystem.config.js" ] && [ -f "$found_dir/server/index.js" ]; then
+        echo "$found_dir"
+        return 0
+    fi
+    
+    # 最后在整个系统中搜索（限制深度以提高性能）
+    local found_dir=$(find / -maxdepth 4 -name "ecosystem.config.js" -path "*chatflow*" 2>/dev/null | grep -v "/proc\|/sys\|/dev" | head -1 | xargs dirname 2>/dev/null)
+    if [ -n "$found_dir" ] && [ -f "$found_dir/ecosystem.config.js" ] && [ -f "$found_dir/server/index.js" ]; then
         echo "$found_dir"
         return 0
     fi
@@ -1388,15 +1403,11 @@ case "$1" in
                 # UFW
                 if command -v ufw &> /dev/null; then
                     sudo ufw delete allow 5000 2>/dev/null || true
-                    sudo ufw delete allow 5001 2>/dev/null || true
-                    sudo ufw delete allow 8000:9999/tcp 2>/dev/null || true
                 fi
                 
                 # Firewalld
                 if command -v firewall-cmd &> /dev/null; then
                     sudo firewall-cmd --permanent --remove-port=5000/tcp 2>/dev/null || true
-                    sudo firewall-cmd --permanent --remove-port=5001/tcp 2>/dev/null || true
-                    sudo firewall-cmd --permanent --remove-port=8000-9999/tcp 2>/dev/null || true
                     sudo firewall-cmd --reload 2>/dev/null || true
                 fi
                 
@@ -1448,6 +1459,36 @@ EOF
     
     chmod +x /usr/local/bin/cf
     print_success "cf 命令已创建"
+    
+    # 显示部署完成信息
+    echo ""
+    echo "============================================"
+    echo "          🎉 部署完成！                   "
+    echo "============================================"
+    
+    # 显示应用信息
+    show_application_info
+    
+    # 提示用户如何使用
+    echo ""
+    print_success "ChatFlow v2.4.1 部署成功！"
+    echo ""
+    print_status "✨ 下一步操作："
+    echo "   1. 在浏览器中访问上面的地址"
+    echo "   2. 注册新账号开始聊天"
+    echo "   3. 使用 'cf' 命令管理应用"
+    echo ""
+    print_status "🔧 常用命令："
+    echo "   cf info      - 显示访问地址"
+    echo "   cf status    - 查看运行状态"
+    echo "   cf logs      - 查看日志"
+    echo "   cf restart   - 重启应用"
+    echo ""
+    print_status "📝 说明："
+    echo "   • 如果无法访问，请检查防火墙设置"
+    echo "   • 确保端口 $CHATFLOW_PORT 未被其他服务占用"
+    echo "   • API连接失败时查看日志: cf logs -e"
+    echo ""
 }
 
 # 运行主函数
