@@ -77,7 +77,7 @@ print_header() {
     echo " | |____| | | | (_| || | |    | | (_) \ V  V / "
     echo " |______|_| |_|\__,_||_|_|    |_|\___/ \_/\_/  "
     echo -e "${NC}"
-    echo -e "${GREEN}         ChatFlow 一键部署 v2.1.0${NC}"
+    echo -e "${GREEN}         ChatFlow 一键部署 v2.2.1${NC}"
     echo -e "${GREEN}         智能环境检测与安装${NC}"
     echo ""
 }
@@ -446,9 +446,18 @@ deploy_application() {
     pm2 stop chatflow 2>/dev/null || true
     pm2 delete chatflow 2>/dev/null || true
     
-    # 安装项目依赖
-    print_status "安装根目录依赖..."
-    npm install
+    # 验证项目结构
+    print_status "验证项目结构..."
+    if [ ! -d "client" ] || [ ! -d "server" ]; then
+        print_error "项目结构不完整，缺少client或server目录"
+        exit 1
+    fi
+    
+    # 安装根目录依赖（如果存在）
+    if [ -f "package.json" ]; then
+        print_status "安装根目录依赖..."
+        npm install
+    fi
     
     # 安装服务端依赖
     print_status "安装服务端依赖..."
@@ -458,9 +467,148 @@ deploy_application() {
     print_status "安装客户端依赖..."
     cd client && npm install && cd ..
     
-    # 构建前端
+    # 构建前端应用
     print_status "构建前端应用..."
-    cd client && npm run build && cd ..
+    cd client
+    
+    # 检查是否有构建脚本
+    if ! npm run build 2>/dev/null; then
+        print_warning "构建命令失败，尝试其他构建方式..."
+        if [ -f "package.json" ]; then
+            # 检查package.json中的脚本
+            if grep -q '"build"' package.json; then
+                npm run build
+            else
+                print_warning "没有找到build脚本，检查是否为开发环境..."
+                # 对于某些项目，可能需要其他构建命令
+                npm run prod 2>/dev/null || npm run production 2>/dev/null || {
+                    print_error "无法找到合适的构建命令"
+                    cd ..
+                    exit 1
+                }
+            fi
+        fi
+    fi
+    
+    cd ..
+    
+    # 验证前端构建结果
+    print_status "验证前端构建..."
+    if [ -d "client/build" ]; then
+        print_success "前端构建成功，发现build目录"
+        BUILD_DIR="client/build"
+    elif [ -d "client/dist" ]; then
+        print_success "前端构建成功，发现dist目录"
+        BUILD_DIR="client/dist"
+    else
+        print_warning "未找到标准构建目录，检查client目录内容..."
+        ls -la client/
+        # 尝试在server中查找静态文件配置
+        if [ -d "client/public" ]; then
+            print_warning "使用public目录作为静态文件"
+            BUILD_DIR="client/public"
+        else
+            print_error "无法找到前端构建文件"
+            exit 1
+        fi
+    fi
+    
+    # 确保服务器能正确服务静态文件
+    print_status "配置静态文件服务..."
+    
+    # 检查服务器是否配置了静态文件服务
+    if [ -f "server/index.js" ]; then
+        # 创建或更新服务器配置以支持静态文件
+        print_status "检查服务器静态文件配置..."
+        
+        # 备份原服务器文件
+        cp server/index.js server/index.js.backup
+        
+        # 检查是否已经配置了静态文件服务
+        if ! grep -q "express.static" server/index.js; then
+            print_status "添加静态文件服务配置..."
+            
+            # 创建静态文件服务补丁
+            cat > server/static-patch.js << 'EOF'
+// 静态文件服务补丁 - 在原服务器基础上添加前端支持
+const express = require('express');
+const path = require('path');
+const fs = require('fs');
+
+// 导出配置函数
+module.exports = function(app) {
+    // 服务静态文件 - 支持多种构建目录
+    const staticDirs = [
+        path.join(__dirname, '../client/build'),
+        path.join(__dirname, '../client/dist'), 
+        path.join(__dirname, '../client/public')
+    ];
+    
+    // 为每个可能的静态目录设置中间件
+    staticDirs.forEach(dir => {
+        if (fs.existsSync(dir)) {
+            console.log(`✓ 配置静态文件目录: ${dir}`);
+            app.use(express.static(dir));
+        }
+    });
+    
+    // 处理SPA路由 - 确保React Router正常工作
+    app.get('*', (req, res, next) => {
+        // 跳过API和Socket.IO请求
+        if (req.path.startsWith('/api/') || 
+            req.path.startsWith('/socket.io/') ||
+            req.path.includes('.')) {
+            return next();
+        }
+        
+        // 查找index.html文件
+        const indexPaths = staticDirs.map(dir => path.join(dir, 'index.html'));
+        
+        for (const indexPath of indexPaths) {
+            if (fs.existsSync(indexPath)) {
+                console.log(`✓ 服务前端页面: ${indexPath}`);
+                return res.sendFile(indexPath);
+            }
+        }
+        
+        // 如果找不到前端文件，返回友好错误
+        res.status(404).json({
+            error: 'Frontend not found',
+            message: 'Please ensure the frontend is built correctly',
+            availableRoutes: ['/api']
+        });
+    });
+};
+EOF
+            
+            # 修改原服务器文件以包含静态文件补丁
+            print_status "应用静态文件补丁..."
+            
+            # 在server/index.js末尾添加补丁调用
+            if ! grep -q "static-patch" server/index.js; then
+                # 备份并修改
+                cat >> server/index.js << 'EOF'
+
+// 应用静态文件服务补丁
+try {
+    const staticPatch = require('./static-patch');
+    staticPatch(app);
+    console.log('✓ 静态文件服务已配置');
+} catch (error) {
+    console.warn('⚠ 静态文件补丁应用失败:', error.message);
+}
+EOF
+                print_success "静态文件补丁已应用"
+            else
+                print_warning "静态文件补丁已存在，跳过"
+            fi
+        else
+            print_success "检测到已有express.static配置"
+        fi
+    else
+        print_error "服务器文件 server/index.js 不存在"
+        exit 1
+    fi
     
     # 创建环境配置
     print_status "创建环境配置..."
@@ -567,8 +715,14 @@ EOF
         fi
     fi
     
-    # 确认当前在正确的项目目录中
-    if [ ! -f "package.json" ] || [ ! -d "client" ] || [ ! -d "server" ]; then
+    # 最终验证项目结构
+    print_status "最终验证项目结构..."
+    if [ ! -f "package.json" ] && [ ! -f "server/package.json" ]; then
+        print_error "项目配置不完整，缺少package.json"
+        exit 1
+    fi
+    
+    if [ ! -d "client" ] || [ ! -d "server" ]; then
         print_error "项目结构不完整，请检查克隆是否成功"
         print_status "当前目录内容："
         ls -la
@@ -577,6 +731,7 @@ EOF
     
     PROJECT_DIR=$(pwd)
     print_status "确认项目目录: $PROJECT_DIR"
+    print_status "前端构建目录: $BUILD_DIR"
     
     # 启动应用
     print_status "启动 ChatFlow 应用..."
@@ -603,6 +758,17 @@ EOF
     
     # 保存PM2配置
     pm2 save
+    
+    # 验证前端是否可访问
+    print_status "验证前端服务..."
+    sleep 3
+    if curl -s --connect-timeout 10 http://localhost:5000 | grep -q "html\|<!DOCTYPE\|<html"; then
+        print_success "前端服务验证成功！"
+    else
+        print_warning "前端服务可能有问题，请检查日志"
+        print_status "显示最新错误日志："
+        pm2 logs chatflow --err --lines 10 2>/dev/null || true
+    fi
     
     print_success "应用部署完成"
 }
@@ -633,8 +799,14 @@ show_application_info() {
         local_http=true
     fi
     
+    # 测试前端内容
+    local frontend_available=false
+    if curl -s --connect-timeout 5 http://localhost:5000 | grep -q "html\|<!DOCTYPE\|<html"; then
+        frontend_available=true
+    fi
+    
     echo -e "${GREEN}系统状态:${NC}"
-    echo -e "  PM2应用状态: ${YELLOW}$pm2_status${NC}"
+    echo -e "  应用状态: ${YELLOW}$pm2_status${NC}"
     
     if [ "$port_listening" = true ]; then
         echo -e "  端口5000监听: ${GREEN}✓ 正常${NC}"
@@ -648,10 +820,16 @@ show_application_info() {
         echo -e "  HTTP连接测试: ${YELLOW}⚠ 可能需要等待${NC}"
     fi
     
+    if [ "$frontend_available" = true ]; then
+        echo -e "  前端页面: ${GREEN}✓ 可访问${NC}"
+    else
+        echo -e "  前端页面: ${YELLOW}⚠ 检查中...${NC}"
+    fi
+    
     echo ""
     echo -e "${GREEN}访问信息:${NC}"
+    echo -e "  主页面: ${YELLOW}http://$SERVER_IP:5000${NC}"
     echo -e "  本地访问: ${YELLOW}http://localhost:5000${NC}"
-    echo -e "  外网访问: ${YELLOW}http://$SERVER_IP:5000${NC}"
     echo -e "  API接口: ${YELLOW}http://$SERVER_IP:5000/api${NC}"
     echo ""
     
@@ -668,20 +846,27 @@ show_application_info() {
         echo ""
     fi
     
-    echo -e "${GREEN}管理命令:${NC}"
-    echo -e "  查看状态: ${YELLOW}cf status${NC} 或 ${YELLOW}pm2 status chatflow${NC}"
-    echo -e "  查看日志: ${YELLOW}cf logs${NC} 或 ${YELLOW}pm2 logs chatflow${NC}"
-    echo -e "  重启应用: ${YELLOW}cf restart${NC} 或 ${YELLOW}pm2 restart chatflow${NC}"
-    echo -e "  停止应用: ${YELLOW}cf stop${NC} 或 ${YELLOW}pm2 stop chatflow${NC}"
+    echo -e "${GREEN}管理命令 (统一使用cf):${NC}"
+    echo -e "  查看状态: ${YELLOW}cf status${NC}"
+    echo -e "  查看日志: ${YELLOW}cf logs${NC}"
+    echo -e "  查看错误日志: ${YELLOW}cf logs -e${NC}"
+    echo -e "  重启应用: ${YELLOW}cf restart${NC}"
+    echo -e "  停止应用: ${YELLOW}cf stop${NC}"
+    echo -e "  启动应用: ${YELLOW}cf start${NC}"
+    echo -e "  应用信息: ${YELLOW}cf info${NC}"
+    echo -e "  监控模式: ${YELLOW}cf monitor${NC}"
+    echo -e "  更新应用: ${YELLOW}cf update${NC}"
+    echo -e "  卸载应用: ${YELLOW}cf uninstall${NC}"
     echo ""
     
     # 如果应用未正常运行，提供故障排除信息
-    if [ "$pm2_status" != "online" ] || [ "$port_listening" = false ]; then
+    if [ "$pm2_status" != "online" ] || [ "$port_listening" = false ] || [ "$frontend_available" = false ]; then
         echo -e "${YELLOW}故障排除:${NC}"
-        echo -e "  检查应用日志: ${YELLOW}pm2 logs chatflow --lines 50${NC}"
-        echo -e "  查看错误日志: ${YELLOW}cat logs/err.log${NC}"
-        echo -e "  检查端口占用: ${YELLOW}netstat -tlnp | grep 5000${NC}"
-        echo -e "  手动重启: ${YELLOW}pm2 restart chatflow${NC}"
+        echo -e "  检查应用日志: ${YELLOW}cf logs${NC}"
+        echo -e "  查看错误详情: ${YELLOW}cf logs -e${NC}"
+        echo -e "  检查应用状态: ${YELLOW}cf status${NC}"
+        echo -e "  重启应用: ${YELLOW}cf restart${NC}"
+        echo -e "  查看应用信息: ${YELLOW}cf info${NC}"
         echo ""
         
         # 显示最新日志
@@ -690,12 +875,26 @@ show_application_info() {
             tail -10 logs/err.log 2>/dev/null | sed 's/^/    /' || true
             echo ""
         fi
+        
+        # 如果前端不可用，提供额外说明
+        if [ "$frontend_available" = false ]; then
+            print_warning "前端页面暂不可用，可能原因："
+            echo -e "  - 前端构建失败，运行: ${YELLOW}cf logs${NC} 查看详情"
+            echo -e "  - 服务器静态文件配置问题"
+            echo -e "  - 应用启动中，请稍后再试"
+            echo ""
+        fi
     fi
     
     echo -e "${GREEN}项目目录:${NC} $(pwd)"
-    echo -e "${GREEN}版本信息:${NC} ChatFlow v2.1.0"
+    echo -e "${GREEN}版本信息:${NC} ChatFlow v2.2.1"
     echo ""
-    print_success "部署完成！请访问上述地址开始使用ChatFlow"
+    
+    if [ "$frontend_available" = true ] && [ "$pm2_status" = "online" ]; then
+        print_success "部署完成！前后端均正常运行，请访问上述地址开始使用ChatFlow"
+    else
+        print_warning "部署完成但可能需要稍等片刻或检查日志。运行 'cf status' 和 'cf logs' 查看详情"
+    fi
 }
 
 # 获取服务器IP地址
@@ -912,8 +1111,31 @@ case "$1" in
         echo -e "${BLUE}更新 ChatFlow...${NC}"
         cd /root/chatflow 2>/dev/null || cd ~/chatflow
         git pull origin main
-        npm install
-        cd client && npm install && npm run build && cd ..
+        
+        # 安装根目录依赖（如果存在）
+        if [ -f "package.json" ]; then
+            npm install
+        fi
+        
+        # 更新服务端依赖
+        cd server && npm install && cd ..
+        
+        # 更新客户端依赖并重新构建
+        cd client && npm install
+        
+        # 构建前端
+        if ! npm run build 2>/dev/null; then
+            echo -e "${YELLOW}构建命令失败，尝试其他构建方式...${NC}"
+            npm run prod 2>/dev/null || npm run production 2>/dev/null || {
+                echo -e "${RED}前端构建失败${NC}"
+                cd ..
+                exit 1
+            }
+        fi
+        
+        cd ..
+        
+        # 重启应用
         pm2 restart chatflow
         echo -e "${GREEN}更新完成！${NC}"
         ;;
@@ -983,6 +1205,93 @@ EOF
     # 设置执行权限
     chmod +x /usr/local/bin/cf
     print_success "自定义cf命令已创建"
+    
+    # 创建或更新部署说明文档
+    print_status "创建部署说明文档..."
+    cat > DEPLOYMENT.md << 'EOF'
+# ChatFlow 部署说明
+
+## 快速部署
+
+### 一键部署
+```bash
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
+```
+
+### 一键卸载
+```bash
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash -s uninstall
+```
+
+## 管理命令
+
+部署完成后，可以使用 `cf` 命令管理应用：
+
+```bash
+cf status      # 查看应用状态
+cf start       # 启动应用
+cf stop        # 停止应用
+cf restart     # 重启应用
+cf logs        # 查看实时日志
+cf logs -e     # 查看错误日志
+cf update      # 更新应用
+cf info        # 显示应用信息
+cf monitor     # 监控模式
+cf uninstall   # 卸载应用
+cf help        # 显示帮助
+```
+
+## 访问地址
+
+- 主页面: http://your-server-ip:5000
+- API接口: http://your-server-ip:5000/api
+
+## 防火墙配置
+
+如果需要外网访问，请开放5000端口：
+
+### Ubuntu/Debian (UFW)
+```bash
+sudo ufw allow 5000
+```
+
+### CentOS/RHEL (firewalld)
+```bash
+sudo firewall-cmd --permanent --add-port=5000/tcp
+sudo firewall-cmd --reload
+```
+
+## 故障排除
+
+### 1. 前端页面无法访问
+```bash
+cf logs          # 查看日志
+cf restart       # 重启应用
+cf status        # 检查状态
+```
+
+### 2. 应用启动失败
+```bash
+cf logs -e       # 查看错误日志
+cf info          # 查看详细信息
+```
+
+### 3. 完全重新部署
+```bash
+cf uninstall     # 卸载应用
+# 重新运行部署命令
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
+```
+
+## 版本信息
+
+- 版本: ChatFlow v2.2.1
+- 支持系统: Ubuntu/Debian, CentOS/RHEL, Alpine Linux
+- Node.js: 16+
+- 数据库: SQLite
+EOF
+    
+    print_success "部署说明文档已创建"
     
     # 显示应用信息
     show_application_info
