@@ -83,17 +83,39 @@ install_nodejs() {
     print_status "正在安装 Node.js..."
     
     if [ "$OS" = "debian" ]; then
-        # Ubuntu/Debian
-        $SUDO apt update
-        curl -fsSL https://deb.nodesource.com/setup_18.x | ${SUDO} bash -
-        $SUDO $INSTALL_CMD nodejs
+        # Ubuntu/Debian - 使用更可靠的安装方法
+        apt update
+        
+        # 方法1：尝试从官方仓库安装
+        if apt install -y nodejs npm; then
+            NODE_VERSION=$(node -v 2>/dev/null || echo "v0.0.0")
+            NODE_MAJOR=$(echo $NODE_VERSION | cut -d'.' -f1 | sed 's/v//')
+            if [ "$NODE_MAJOR" -ge 16 ]; then
+                print_success "Node.js 从官方仓库安装成功: $NODE_VERSION"
+                return 0
+            else
+                print_warning "官方仓库版本过低，尝试NodeSource仓库..."
+                apt remove -y nodejs npm
+            fi
+        fi
+        
+        # 方法2：使用NodeSource仓库
+        print_status "添加NodeSource仓库..."
+        curl -fsSL https://deb.nodesource.com/setup_18.x -o nodesource_setup.sh
+        bash nodesource_setup.sh
+        apt install -y nodejs
+        
     elif [ "$OS" = "centos" ]; then
         # CentOS/RHEL
-        curl -fsSL https://rpm.nodesource.com/setup_18.x | ${SUDO} bash -
-        $SUDO $INSTALL_CMD nodejs npm
+        print_status "添加NodeSource仓库..."
+        curl -fsSL https://rpm.nodesource.com/setup_18.x -o nodesource_setup.sh
+        bash nodesource_setup.sh
+        yum install -y nodejs npm
+        
     elif [ "$OS" = "alpine" ]; then
         # Alpine Linux
-        $SUDO $INSTALL_CMD nodejs npm
+        apk add nodejs npm
+        
     else
         # 通用方式 - 使用Node Version Manager (nvm)
         print_status "使用 nvm 安装 Node.js..."
@@ -105,7 +127,16 @@ install_nodejs() {
         nvm alias default 18
     fi
     
-    print_success "Node.js 安装完成"
+    # 验证安装
+    if command -v node &> /dev/null; then
+        NODE_VERSION=$(node -v)
+        NPM_VERSION=$(npm -v)
+        print_success "Node.js 安装完成: $NODE_VERSION"
+        print_success "npm 版本: $NPM_VERSION"
+    else
+        print_error "Node.js 安装失败"
+        exit 1
+    fi
 }
 
 # 安装Git
@@ -113,11 +144,11 @@ install_git() {
     print_status "正在安装 Git..."
     
     if [ "$OS" = "debian" ]; then
-        $SUDO $INSTALL_CMD git
+        apt install -y git
     elif [ "$OS" = "centos" ]; then
-        $SUDO $INSTALL_CMD git
+        yum install -y git
     elif [ "$OS" = "alpine" ]; then
-        $SUDO $INSTALL_CMD git
+        apk add git
     else
         print_warning "请手动安装 Git"
         return 1
@@ -131,12 +162,12 @@ install_basic_tools() {
     print_status "正在安装基础工具..."
     
     if [ "$OS" = "debian" ]; then
-        $SUDO apt update
-        $SUDO $INSTALL_CMD curl wget openssl build-essential
+        apt update
+        apt install -y curl wget openssl build-essential
     elif [ "$OS" = "centos" ]; then
-        $SUDO $INSTALL_CMD curl wget openssl gcc gcc-c++ make
+        yum install -y curl wget openssl gcc gcc-c++ make
     elif [ "$OS" = "alpine" ]; then
-        $SUDO $INSTALL_CMD curl wget openssl build-base
+        apk add curl wget openssl build-base
     fi
     
     print_success "基础工具安装完成"
@@ -180,9 +211,9 @@ check_and_install_dependencies() {
     if ! command -v npm &> /dev/null; then
         print_warning "npm 未安装，正在安装..."
         if [ "$OS" = "debian" ]; then
-            $SUDO $INSTALL_CMD npm
+            apt install -y npm
         elif [ "$OS" = "centos" ]; then
-            $SUDO $INSTALL_CMD npm
+            yum install -y npm
         fi
     else
         NPM_VERSION=$(npm -v)
