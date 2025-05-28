@@ -93,6 +93,13 @@ const ChatApp: React.FC<ChatAppProps> = ({ user, onLogout }) => {
           updated[message.roomId] = [];
         }
         
+        // 智能去重：如果是自己发送的消息，先移除临时消息
+        if (message.user_id === user.id) {
+          updated[message.roomId] = updated[message.roomId].filter(m => 
+            !m.id.startsWith('temp-') || m.content !== message.content
+          );
+        }
+        
         // 避免重复消息
         const exists = updated[message.roomId].some(m => m.id === message.id);
         if (!exists) {
@@ -124,31 +131,44 @@ const ChatApp: React.FC<ChatAppProps> = ({ user, onLogout }) => {
       console.log('收到私聊消息:', message);
       setPrivateMessages(prev => {
         const updated = { ...prev };
-        if (!updated[message.sender.id]) {
-          updated[message.sender.id] = [];
+        
+        // 修复：确定对话的另一方用户ID
+        // 如果是自己发送的消息，对方是receiver
+        // 如果是接收的消息，对方是sender
+        const otherUserId = message.sender_id === user.id ? message.receiver_id : message.sender_id;
+        
+        if (!updated[otherUserId]) {
+          updated[otherUserId] = [];
+        }
+        
+        // 智能去重：如果是自己发送的消息，先移除临时消息
+        if (message.sender_id === user.id) {
+          updated[otherUserId] = updated[otherUserId].filter(m => 
+            !m.id.startsWith('temp-') || m.content !== message.content
+          );
         }
         
         // 避免重复消息
-        const exists = updated[message.sender.id].some(m => m.id === message.id);
+        const exists = updated[otherUserId].some(m => m.id === message.id);
         if (!exists) {
-          updated[message.sender.id] = [...updated[message.sender.id], message];
+          updated[otherUserId] = [...updated[otherUserId], message];
         }
         
         return updated;
       });
       
-      // 更新私聊未读消息计数
-      if (message.sender.id !== user.id) {
+      // 更新私聊未读消息计数（只对接收到的消息计数）
+      if (message.sender_id !== user.id) {
         setPrivateUnreadCounts(prev => {
-          const existing = prev.find(c => c.userId === message.sender.id);
+          const existing = prev.find(c => c.userId === message.sender_id);
           if (existing) {
             return prev.map(c => 
-              c.userId === message.sender.id 
+              c.userId === message.sender_id 
                 ? { ...c, count: c.count + 1 }
                 : c
             );
           } else {
-            return [...prev, { userId: message.sender.id, count: 1 }];
+            return [...prev, { userId: message.sender_id, count: 1 }];
           }
         });
       }
@@ -356,13 +376,54 @@ const ChatApp: React.FC<ChatAppProps> = ({ user, onLogout }) => {
   const handleSendMessage = async (message: string, image?: File) => {
     if (!currentRoom) return;
     
+    // 乐观更新：立即添加消息到本地状态
+    const tempMessage: Message = {
+      id: `temp-${Date.now()}`, // 临时ID
+      user: user,
+      user_id: user.id,
+      username: user.username,
+      avatar: user.avatar,
+      content: message,
+      message: message,
+      roomId: currentRoom,
+      timestamp: new Date().toISOString()
+    };
+    
+    // 立即添加到本地状态
+    setMessages(prev => {
+      const updated = { ...prev };
+      if (!updated[currentRoom]) {
+        updated[currentRoom] = [];
+      }
+      updated[currentRoom] = [...updated[currentRoom], tempMessage];
+      return updated;
+    });
+    
     try {
       const result = await sendMessageWithConnectionCheck(user, message, currentRoom, image);
       if (result) {
         console.log('消息发送成功');
+        // 服务器响应后，临时消息会被真实消息替换（通过socket监听器）
+      } else {
+        // 发送失败，移除乐观更新的消息
+        setMessages(prev => {
+          const updated = { ...prev };
+          if (updated[currentRoom]) {
+            updated[currentRoom] = updated[currentRoom].filter(m => m.id !== tempMessage.id);
+          }
+          return updated;
+        });
       }
     } catch (error) {
       console.error('发送消息失败:', error);
+      // 发送失败，移除乐观更新的消息
+      setMessages(prev => {
+        const updated = { ...prev };
+        if (updated[currentRoom]) {
+          updated[currentRoom] = updated[currentRoom].filter(m => m.id !== tempMessage.id);
+        }
+        return updated;
+      });
       alert('发送消息失败，请重试');
     }
   };
@@ -370,13 +431,57 @@ const ChatApp: React.FC<ChatAppProps> = ({ user, onLogout }) => {
   const handleSendPrivateMessage = async (message: string, image?: File) => {
     if (!currentPrivateUser) return;
     
+    // 乐观更新：立即添加消息到本地状态
+    const tempMessage: PrivateMessage = {
+      id: `temp-${Date.now()}`, // 临时ID
+      sender: user,
+      receiver: currentPrivateUser,
+      sender_id: user.id,
+      receiver_id: currentPrivateUser.id,
+      sender_username: user.username,
+      receiver_username: currentPrivateUser.username,
+      sender_avatar: user.avatar,
+      receiver_avatar: currentPrivateUser.avatar,
+      content: message,
+      message: message,
+      timestamp: new Date().toISOString()
+    };
+    
+    // 立即添加到本地状态
+    setPrivateMessages(prev => {
+      const updated = { ...prev };
+      if (!updated[currentPrivateUser.id]) {
+        updated[currentPrivateUser.id] = [];
+      }
+      updated[currentPrivateUser.id] = [...updated[currentPrivateUser.id], tempMessage];
+      return updated;
+    });
+    
     try {
       const result = await sendPrivateMessageWithConnectionCheck(user, currentPrivateUser, message, image);
       if (result) {
         console.log('私聊消息发送成功');
+        // 服务器响应后，临时消息会被真实消息替换（通过socket监听器）
+      } else {
+        // 发送失败，移除乐观更新的消息
+        setPrivateMessages(prev => {
+          const updated = { ...prev };
+          if (updated[currentPrivateUser.id]) {
+            updated[currentPrivateUser.id] = updated[currentPrivateUser.id].filter(m => m.id !== tempMessage.id);
+          }
+          return updated;
+        });
       }
     } catch (error) {
       console.error('发送私聊消息失败:', error);
+      // 发送失败，移除乐观更新的消息
+      setPrivateMessages(prev => {
+        const updated = { ...prev };
+        if (updated[currentPrivateUser.id]) {
+          updated[currentPrivateUser.id] = updated[currentPrivateUser.id].filter(m => m.id !== tempMessage.id);
+        }
+        return updated;
+      });
       alert('发送私聊消息失败，请重试');
     }
   };
