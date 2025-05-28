@@ -23,10 +23,10 @@
 
 ```bash
 # 下载并运行部署脚本
-curl -sSL https://raw.githubusercontent.com/your-username/chatflow/main/deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
 
 # 或者分步执行
-wget https://raw.githubusercontent.com/your-username/chatflow/main/deploy.sh
+wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh
 chmod +x deploy.sh
 sudo ./deploy.sh
 ```
@@ -39,7 +39,7 @@ sudo ./deploy.sh
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-username/chatflow.git
+git clone https://github.com/KaiGe7384/chatflow.git
 cd chatflow
 
 # 运行快速部署脚本
@@ -52,7 +52,7 @@ chmod +x quick-deploy.sh
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/your-username/chatflow.git
+git clone https://github.com/KaiGe7384/chatflow.git
 cd chatflow
 ```
 
@@ -396,7 +396,7 @@ module.exports = {
 ## 📞 技术支持
 
 - 📧 Email: support@chatflow.com
-- 💬 GitHub Issues: https://github.com/your-username/chatflow/issues
+- 💬 GitHub Issues: https://github.com/KaiGe7384/chatflow/issues
 - 📖 文档: https://chatflow.docs.com
 
 ---

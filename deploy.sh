@@ -22,7 +22,7 @@ USER="chatflow"
 SERVICE_NAME="chatflow"
 WEB_PORT=3000
 API_PORT=5000
-GITHUB_REPO="https://github.com/your-username/chatflow.git"  # 请替换为实际的GitHub仓库地址
+GITHUB_REPO="https://github.com/KaiGe7384/chatflow.git"
 
 # 打印带颜色的消息
 print_status() {
@@ -125,10 +125,11 @@ download_source() {
     mkdir -p $INSTALL_DIR
     cd $INSTALL_DIR
     
-    # 检查GitHub仓库地址是否为占位符
-    if [[ "$GITHUB_REPO" == *"your-username"* ]]; then
-        print_error "请先修改脚本中的GITHUB_REPO变量为实际的GitHub仓库地址"
-        print_error "当前地址: $GITHUB_REPO"
+    # 检查GitHub仓库地址是否已更新
+    if [[ "$GITHUB_REPO" == *"KaiGe7384"* ]]; then
+        echo "✅ GitHub仓库地址已正确配置"
+    else
+        echo "❌ 错误：请在脚本中更新GITHUB_REPO变量为您的实际GitHub仓库地址"
         exit 1
     fi
     

@@ -40,8 +40,9 @@
 ### 本地开发
 
 1. **克隆项目**
+
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/KaiGe7384/chatflow.git
 cd chatflow
 ```
 
@@ -69,10 +70,10 @@ npm run dev  # 开发模式（热重载）
 
 ```bash
 # 下载并运行快速部署脚本
-curl -sSL https://raw.githubusercontent.com/your-username/chatflow/main/quick-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/quick-deploy.sh | bash
 
 # 或者下载后运行
-wget https://raw.githubusercontent.com/your-username/chatflow/main/quick-deploy.sh
+wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/quick-deploy.sh
 chmod +x quick-deploy.sh
 ./quick-deploy.sh
 ```
@@ -83,10 +84,10 @@ chmod +x quick-deploy.sh
 
 ```bash
 # 需要root权限
-curl -sSL https://raw.githubusercontent.com/your-username/chatflow/main/deploy.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | sudo bash
 
 # 或者下载后运行
-wget https://raw.githubusercontent.com/your-username/chatflow/main/deploy.sh
+wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh
 chmod +x deploy.sh
 sudo ./deploy.sh
 ```
@@ -95,7 +96,7 @@ sudo ./deploy.sh
 
 ```bash
 # 下载状态检查脚本
-wget https://raw.githubusercontent.com/your-username/chatflow/main/check-deployment.sh
+wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/check-deployment.sh
 chmod +x check-deployment.sh
 ./check-deployment.sh
 ```

@@ -9,7 +9,7 @@
 
 ```bash
 # 1. 克隆项目
-git clone <your-repo-url>
+git clone https://github.com/KaiGe7384/chatflow.git
 cd chatflow
 
 # 2. 安装所有依赖
