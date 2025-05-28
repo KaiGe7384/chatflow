@@ -675,20 +675,111 @@ show_application_info() {
     print_success "部署完成！请访问上述地址开始使用ChatFlow"
 }
 
+# 获取服务器IP地址
+get_server_ip() {
+    SERVER_IP=""
+    if command -v curl &> /dev/null; then
+        SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s --connect-timeout 5 ipinfo.io/ip 2>/dev/null || curl -s --connect-timeout 5 icanhazip.com 2>/dev/null)
+    fi
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I | awk '{print $1}')
+    fi
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP="localhost"
+    fi
+    echo $SERVER_IP
+}
+
+# 卸载函数
+uninstall_chatflow() {
+    print_header
+    echo -e "${RED}ChatFlow 卸载程序${NC}"
+    echo ""
+    
+    # 确认卸载
+    read -p "确定要卸载ChatFlow吗？这将删除所有数据和配置 [y/N]: " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_status "卸载已取消"
+        exit 0
+    fi
+    
+    print_status "开始卸载ChatFlow..."
+    
+    # 停止并删除PM2进程
+    print_status "停止ChatFlow服务..."
+    pm2 stop chatflow 2>/dev/null || true
+    pm2 delete chatflow 2>/dev/null || true
+    pm2 save 2>/dev/null || true
+    
+    # 删除开机自启动
+    print_status "移除开机自启动..."
+    pm2 unstartup 2>/dev/null || true
+    
+    # 删除项目目录
+    PROJECT_DIRS=("/root/chatflow" "~/chatflow" "./chatflow")
+    for dir in "${PROJECT_DIRS[@]}"; do
+        if [ -d "$dir" ]; then
+            print_status "删除项目目录: $dir"
+            rm -rf "$dir"
+        fi
+    done
+    
+    # 删除cf命令
+    if [ -f "/usr/local/bin/cf" ]; then
+        print_status "删除cf管理命令..."
+        rm -f /usr/local/bin/cf
+    fi
+    
+    # 清理PM2相关文件
+    print_status "清理PM2文件..."
+    rm -rf ~/.pm2/logs/chatflow* 2>/dev/null || true
+    rm -rf ~/.pm2/pids/chatflow* 2>/dev/null || true
+    
+    # 清理防火墙规则（询问用户）
+    if command -v ufw &> /dev/null; then
+        read -p "是否移除UFW防火墙5000端口规则？ [y/N]: " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            ufw delete allow 5000 2>/dev/null || true
+        fi
+    fi
+    
+    if command -v firewall-cmd &> /dev/null; then
+        read -p "是否移除firewalld防火墙5000端口规则？ [y/N]: " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            firewall-cmd --permanent --remove-port=5000/tcp 2>/dev/null || true
+            firewall-cmd --reload 2>/dev/null || true
+        fi
+    fi
+    
+    echo ""
+    print_success "ChatFlow 卸载完成！"
+    echo ""
+    print_status "保留的组件（如需要可手动卸载）："
+    echo -e "  - Node.js: ${YELLOW}apt remove nodejs npm${NC} (Debian/Ubuntu)"
+    echo -e "  - PM2: ${YELLOW}npm uninstall -g pm2${NC}"
+    echo -e "  - Git: ${YELLOW}apt remove git${NC} (Debian/Ubuntu)"
+}
+
 # 主函数
 main() {
+    # 检查参数
+    if [ "$1" = "uninstall" ] || [ "$1" = "--uninstall" ] || [ "$1" = "-u" ]; then
+        uninstall_chatflow
+        exit 0
+    fi
+    
     print_header
     
     # 检查root权限
     if [ "$EUID" -ne 0 ]; then
         print_error "此脚本需要root权限运行"
         print_status "请使用: sudo bash $0"
+        print_status "卸载使用: sudo bash $0 uninstall"
         exit 1
     fi
-    
-    # 获取项目目录
-    PROJECT_DIR="${PROJECT_DIR:-/root/chatflow}"
-    cd "$(dirname "$PROJECT_DIR")"
     
     print_status "开始部署 ChatFlow..."
     
@@ -704,8 +795,17 @@ main() {
     # 克隆或更新项目
     setup_project
     
-    # 进入项目目录
-    cd "$PROJECT_DIR"
+    # 进入项目目录（修复路径问题）
+    if [ -d "chatflow" ]; then
+        cd chatflow
+        PROJECT_DIR=$(pwd)
+        print_status "进入项目目录: $PROJECT_DIR"
+    else
+        print_error "项目目录不存在，克隆可能失败"
+        print_status "当前目录内容："
+        ls -la
+        exit 1
+    fi
     
     # 部署应用
     deploy_application
@@ -741,6 +841,7 @@ print_help() {
     echo -e "  ${YELLOW}cf update${NC}     - 更新应用"
     echo -e "  ${YELLOW}cf info${NC}       - 显示应用信息"
     echo -e "  ${YELLOW}cf monitor${NC}    - 监控模式"
+    echo -e "  ${YELLOW}cf uninstall${NC}  - 卸载ChatFlow"
     echo -e "  ${YELLOW}cf help${NC}       - 显示此帮助"
     echo ""
 }
@@ -748,7 +849,7 @@ print_help() {
 get_server_ip() {
     SERVER_IP=""
     if command -v curl &> /dev/null; then
-        SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
+        SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s --connect-timeout 5 ipinfo.io/ip 2>/dev/null || curl -s --connect-timeout 5 icanhazip.com 2>/dev/null)
     fi
     if [ -z "$SERVER_IP" ]; then
         SERVER_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I | awk '{print $1}')
@@ -809,6 +910,42 @@ case "$1" in
     "monitor"|"mon")
         echo -e "${BLUE}ChatFlow 监控模式 (Ctrl+C退出):${NC}"
         pm2 monit
+        ;;
+    "uninstall")
+        echo -e "${RED}ChatFlow 卸载程序${NC}"
+        echo ""
+        read -p "确定要卸载ChatFlow吗？这将删除所有数据和配置 [y/N]: " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${BLUE}卸载已取消${NC}"
+            exit 0
+        fi
+        
+        echo -e "${BLUE}开始卸载ChatFlow...${NC}"
+        
+        # 停止并删除PM2进程
+        echo -e "${BLUE}停止ChatFlow服务...${NC}"
+        pm2 stop chatflow 2>/dev/null || true
+        pm2 delete chatflow 2>/dev/null || true
+        pm2 save 2>/dev/null || true
+        
+        # 删除开机自启动
+        echo -e "${BLUE}移除开机自启动...${NC}"
+        pm2 unstartup 2>/dev/null || true
+        
+        # 删除项目目录
+        PROJECT_DIRS=("/root/chatflow" "~/chatflow")
+        for dir in "\${PROJECT_DIRS[@]}"; do
+            if [ -d "\$dir" ]; then
+                echo -e "${BLUE}删除项目目录: \$dir${NC}"
+                rm -rf "\$dir"
+            fi
+        done
+        
+        # 删除cf命令（自删除，需要在最后执行）
+        echo -e "${GREEN}ChatFlow 卸载完成！${NC}"
+        echo -e "${YELLOW}正在删除cf命令...${NC}"
+        rm -f /usr/local/bin/cf
         ;;
     "help"|"-h"|"--help"|"")
         print_help

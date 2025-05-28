@@ -39,6 +39,15 @@
 curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
 ```
 
+### 快速卸载
+```bash
+# 方法1：使用部署脚本卸载
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash -s uninstall
+
+# 方法2：使用cf命令卸载（部署完成后）
+cf uninstall
+```
+
 ### 部署特性
 - ✅ **智能系统检测**: 自动识别 Ubuntu/Debian、CentOS/RHEL、Alpine Linux
 - ✅ **依赖自动安装**: Node.js 18+、npm、Git、PM2 等全自动安装
@@ -75,6 +84,9 @@ cf update            # 从GitHub拉取最新代码并重启
 
 # 监控模式
 cf monitor           # 进入PM2监控界面
+
+# 卸载应用
+cf uninstall         # 完全卸载ChatFlow
 
 # 帮助信息
 cf help
@@ -184,6 +196,10 @@ sudo firewall-cmd --list-ports  # CentOS/RHEL
 ### 重新部署
 ```bash
 # 如遇到问题，可重新运行部署脚本
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
+
+# 或者先卸载再重新安装
+cf uninstall
 curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
 ```
 
