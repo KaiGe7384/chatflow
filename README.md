@@ -64,33 +64,24 @@ npm run dev  # 开发模式（热重载）
 
 ### Linux 生产环境部署
 
-#### 方式一：快速部署（推荐）
-
-适用于开发环境或小型生产环境：
+#### 一键部署（推荐）
 
 ```bash
-# 下载并运行快速部署脚本
-curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/quick-deploy.sh | bash
-
-# 或者下载后运行
-wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/quick-deploy.sh
-chmod +x quick-deploy.sh
-./quick-deploy.sh
-```
-
-#### 方式二：完整生产部署
-
-适用于生产环境，包含Nginx反向代理：
-
-```bash
-# 需要root权限
-curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | sudo bash
+# 一键部署命令
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
 
 # 或者下载后运行
 wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh
 chmod +x deploy.sh
 sudo ./deploy.sh
 ```
+
+**特性：**
+- ✅ 自动检测操作系统（Ubuntu/Debian、CentOS、Alpine Linux）
+- ✅ 智能解决Node.js安装冲突
+- ✅ 非交互式安装，无弹窗
+- ✅ 自动环境依赖检测和安装
+- ✅ 一键启动PM2服务
 
 #### 部署后检查
 
@@ -99,6 +90,41 @@ sudo ./deploy.sh
 wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/check-deployment.sh
 chmod +x check-deployment.sh
 ./check-deployment.sh
+```
+
+## 快速部署 🚀
+
+### 一键部署命令
+
+```bash
+# 推荐方式
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
+
+# 备选方式（如果CDN缓存未更新）
+wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh
+chmod +x deploy.sh
+sudo ./deploy.sh
+```
+
+### 已修复的问题
+
+✅ **Node.js 安装冲突**：自动清理冲突包（libnode-dev等）  
+✅ **dpkg错误**：智能处理包依赖冲突  
+✅ **安装弹窗**：非交互式模式，无需手动确认  
+✅ **权限问题**：自动检测root权限  
+✅ **多系统支持**：Ubuntu/Debian、CentOS、Alpine Linux
+
+### 常见问题解决
+
+**如果遇到Node.js冲突错误：**
+```bash
+# 手动清理冲突包
+sudo apt remove --purge -y nodejs npm libnode-dev libnode72 node-gyp
+sudo apt autoremove -y
+sudo apt autoclean
+
+# 然后重新运行部署脚本
+curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
 ```
 
 ## 🎯 使用方法
@@ -130,8 +156,7 @@ chatflow/
 │   ├── index.js           # 主服务器文件
 │   ├── chat.db            # SQLite数据库
 │   └── package.json
-├── deploy.sh              # 完整生产部署脚本
-├── quick-deploy.sh        # 快速部署脚本
+├── deploy.sh              # 一键部署脚本
 ├── check-deployment.sh    # 部署状态检查脚本
 ├── start.js               # 本地一键启动脚本
 ├── package.json           # 根项目配置

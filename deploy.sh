@@ -1,30 +1,18 @@
 #!/bin/bash
 
 # ChatFlow 一键部署脚本
-# Author: ChatFlow Team
-# Version: 2.0.0
+# 自动检测并安装所需环境依赖，支持多系统
 
 set -e
 
 # 颜色定义
-RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
 PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 配置变量
-APP_NAME="chatflow"
-INSTALL_DIR="/opt/$APP_NAME"
-USER="chatflow"
-SERVICE_NAME="chatflow"
-WEB_PORT=3000
-API_PORT=5000
-GITHUB_REPO="https://github.com/KaiGe7384/chatflow.git"
-
-# 打印带颜色的消息
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -50,18 +38,9 @@ print_header() {
     echo " | |____| | | | (_| || | |    | | (_) \ V  V / "
     echo " |______|_| |_|\__,_||_|_|    |_|\___/ \_/\_/  "
     echo -e "${NC}"
-    echo -e "${CYAN}         ChatFlow 一键部署脚本 v2.0.0${NC}"
-    echo -e "${CYAN}         现代化即时通讯应用${NC}"
+    echo -e "${GREEN}         ChatFlow 一键部署 v2.1.0${NC}"
+    echo -e "${GREEN}         智能环境检测与安装${NC}"
     echo ""
-}
-
-# 检查是否为root用户
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        print_error "请使用root权限运行此脚本"
-        print_status "使用方法: sudo $0"
-        exit 1
-    fi
 }
 
 # 检测操作系统
@@ -79,138 +58,301 @@ detect_os() {
         PM="apk"
         INSTALL_CMD="apk add"
     else
-        print_error "不支持的操作系统，仅支持 CentOS/RHEL、Debian/Ubuntu 和 Alpine Linux"
-        exit 1
+        print_warning "未识别的操作系统，尝试使用通用安装方式"
+        OS="unknown"
     fi
     print_status "检测到操作系统: $OS"
 }
 
-# 安装依赖
-install_dependencies() {
-    print_status "正在安装系统依赖..."
+# 清理Node.js冲突包
+cleanup_nodejs_conflicts() {
+    if [ "$OS" = "debian" ]; then
+        print_status "清理可能冲突的Node.js包..."
+        export DEBIAN_FRONTEND=noninteractive
+        
+        # 停止所有可能运行的Node.js进程
+        pkill -f node 2>/dev/null || true
+        
+        # 清理冲突的包
+        apt remove --purge -y nodejs npm libnode-dev libnode72 node-gyp 2>/dev/null || true
+        apt autoremove -y 2>/dev/null || true
+        apt autoclean 2>/dev/null || true
+        
+        # 清理残留的配置文件
+        rm -rf /etc/apt/sources.list.d/nodesource.list* 2>/dev/null || true
+        rm -rf /usr/share/keyrings/nodesource.gpg 2>/dev/null || true
+        
+        # 更新包列表
+        apt update
+        
+        unset DEBIAN_FRONTEND
+        print_success "冲突包清理完成"
+    fi
+}
+
+# 检查是否有root权限
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        print_error "此脚本需要root权限运行"
+        print_status "请使用: sudo $0"
+        exit 1
+    fi
+    print_status "检测到root权限 ✓"
+}
+
+# 安装Node.js
+install_nodejs() {
+    print_status "正在安装 Node.js..."
     
-    if [ "$OS" = "centos" ]; then
-        $PM update -y
-        $INSTALL_CMD curl wget git nginx sqlite python3 python3-pip gcc gcc-c++ make
-        # 安装Node.js 18
-        curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-        $INSTALL_CMD nodejs
-    elif [ "$OS" = "debian" ]; then
-        $PM update -y
-        $INSTALL_CMD curl wget git nginx sqlite3 python3 python3-pip build-essential
-        # 安装Node.js 18
-        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-        $INSTALL_CMD nodejs
+    # 设置非交互式模式，避免弹窗
+    export DEBIAN_FRONTEND=noninteractive
+    
+    if [ "$OS" = "debian" ]; then
+        # Ubuntu/Debian - 使用更可靠的安装方法
+        apt update
+        
+        # 方法1：尝试从官方仓库安装
+        if apt install -y nodejs npm; then
+            NODE_VERSION=$(node -v 2>/dev/null || echo "v0.0.0")
+            NODE_MAJOR=$(echo $NODE_VERSION | cut -d'.' -f1 | sed 's/v//')
+            if [ "$NODE_MAJOR" -ge 16 ]; then
+                print_success "Node.js 从官方仓库安装成功: $NODE_VERSION"
+                unset DEBIAN_FRONTEND
+                return 0
+            else
+                print_warning "官方仓库版本过低，尝试NodeSource仓库..."
+                # 完全清理旧版本
+                cleanup_nodejs_conflicts
+            fi
+        fi
+        
+        # 方法2：使用NodeSource仓库
+        print_status "添加NodeSource仓库..."
+        
+        # 清理可能冲突的包
+        cleanup_nodejs_conflicts
+        
+        # 下载并安装NodeSource仓库
+        curl -fsSL https://deb.nodesource.com/setup_18.x -o nodesource_setup.sh
+        bash nodesource_setup.sh
+        
+        # 强制安装，忽略冲突
+        print_status "安装Node.js 18..."
+        apt install -y --fix-broken nodejs || {
+            print_warning "标准安装失败，尝试强制安装..."
+            dpkg --configure -a
+            apt install -y --fix-broken || true
+            apt install -y nodejs --force-yes 2>/dev/null || apt install -y nodejs
+        }
+        
+    elif [ "$OS" = "centos" ]; then
+        # CentOS/RHEL
+        print_status "添加NodeSource仓库..."
+        curl -fsSL https://rpm.nodesource.com/setup_18.x -o nodesource_setup.sh
+        bash nodesource_setup.sh
+        yum install -y nodejs npm
+        
     elif [ "$OS" = "alpine" ]; then
-        $PM update
-        $INSTALL_CMD curl wget git nginx sqlite python3 py3-pip nodejs npm build-base
+        # Alpine Linux
+        apk add nodejs npm
+        
+    else
+        # 通用方式 - 使用Node Version Manager (nvm)
+        print_status "使用 nvm 安装 Node.js..."
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        nvm install 18
+        nvm use 18
+        nvm alias default 18
     fi
     
-    # 验证Node.js安装
-    if ! command -v node &> /dev/null; then
+    # 恢复交互式模式
+    unset DEBIAN_FRONTEND
+    
+    # 验证安装
+    if command -v node &> /dev/null; then
+        NODE_VERSION=$(node -v)
+        NPM_VERSION=$(npm -v 2>/dev/null || echo "未安装")
+        print_success "Node.js 安装完成: $NODE_VERSION"
+        print_success "npm 版本: $NPM_VERSION"
+    else
         print_error "Node.js 安装失败"
         exit 1
     fi
-    
-    NODE_VERSION=$(node -v)
-    NPM_VERSION=$(npm -v)
-    print_success "Node.js 版本: $NODE_VERSION"
-    print_success "npm 版本: $NPM_VERSION"
-    
-    # 安装PM2
-    npm install -g pm2
-    
-    print_success "系统依赖安装完成"
 }
 
-# 创建用户
-create_user() {
-    if id "$USER" &>/dev/null; then
-        print_warning "用户 $USER 已存在"
+# 安装Git
+install_git() {
+    print_status "正在安装 Git..."
+    
+    # 设置非交互式模式，避免弹窗
+    export DEBIAN_FRONTEND=noninteractive
+    
+    if [ "$OS" = "debian" ]; then
+        apt install -y git
+    elif [ "$OS" = "centos" ]; then
+        yum install -y git
+    elif [ "$OS" = "alpine" ]; then
+        apk add git
     else
-        print_status "创建用户 $USER..."
-        useradd -r -s /bin/bash -d $INSTALL_DIR $USER
-        print_success "用户 $USER 创建完成"
+        print_warning "请手动安装 Git"
+        unset DEBIAN_FRONTEND
+        return 1
     fi
+    
+    # 恢复交互式模式
+    unset DEBIAN_FRONTEND
+    
+    print_success "Git 安装完成"
 }
 
-# 下载源码
-download_source() {
-    print_status "正在下载 ChatFlow 源码..."
+# 安装基础工具
+install_basic_tools() {
+    print_status "正在安装基础工具..."
     
-    if [ -d "$INSTALL_DIR" ]; then
-        print_warning "目录 $INSTALL_DIR 已存在，正在备份..."
-        mv $INSTALL_DIR ${INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)
+    # 设置非交互式模式，避免弹窗
+    export DEBIAN_FRONTEND=noninteractive
+    
+    if [ "$OS" = "debian" ]; then
+        apt update
+        apt install -y curl wget openssl build-essential
+    elif [ "$OS" = "centos" ]; then
+        yum install -y curl wget openssl gcc gcc-c++ make
+    elif [ "$OS" = "alpine" ]; then
+        apk add curl wget openssl build-base
     fi
     
-    mkdir -p $INSTALL_DIR
-    cd $INSTALL_DIR
+    # 恢复交互式模式
+    unset DEBIAN_FRONTEND
     
-    # 检查GitHub仓库地址是否已更新
-    if [[ "$GITHUB_REPO" == *"KaiGe7384"* ]]; then
-        print_success "GitHub仓库地址已正确配置"
+    print_success "基础工具安装完成"
+}
+
+# 检查并安装依赖
+check_and_install_dependencies() {
+    print_status "检查系统依赖..."
+    
+    # 检测操作系统
+    detect_os
+    check_root
+    
+    # 检查基础工具
+    if ! command -v curl &> /dev/null; then
+        print_warning "curl 未安装，正在安装..."
+        install_basic_tools
+    fi
+    
+    if ! command -v git &> /dev/null; then
+        print_warning "Git 未安装，正在安装..."
+        install_git
+    fi
+    
+    # 检查Node.js
+    if ! command -v node &> /dev/null; then
+        print_warning "Node.js 未安装，正在安装..."
+        install_nodejs
     else
-        print_error "请在脚本中更新GITHUB_REPO变量为您的实际GitHub仓库地址"
-        exit 1
+        NODE_VERSION=$(node -v)
+        NODE_MAJOR=$(echo $NODE_VERSION | cut -d'.' -f1 | sed 's/v//')
+        if [ "$NODE_MAJOR" -lt 16 ]; then
+            print_warning "Node.js 版本过低 ($NODE_VERSION)，正在升级..."
+            install_nodejs
+        else
+            print_success "Node.js 版本: $NODE_VERSION ✓"
+        fi
     fi
     
-    print_status "从GitHub克隆项目..."
-    git clone $GITHUB_REPO .
+    # 检查npm
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm 未安装，正在安装..."
+        if [ "$OS" = "debian" ]; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt install -y npm
+            unset DEBIAN_FRONTEND
+        elif [ "$OS" = "centos" ]; then
+            yum install -y npm
+        fi
+    else
+        NPM_VERSION=$(npm -v)
+        print_success "npm 版本: $NPM_VERSION ✓"
+    fi
     
-    chown -R $USER:$USER $INSTALL_DIR
-    print_success "源码下载完成"
+    print_success "所有依赖检查完成"
 }
 
-# 安装应用依赖
-install_app_dependencies() {
-    print_status "正在安装应用依赖..."
+# 克隆或更新项目
+setup_project() {
+    PROJECT_DIR="chatflow"
+    GITHUB_REPO="https://github.com/KaiGe7384/chatflow.git"
     
-    cd $INSTALL_DIR
+    if [ -d "$PROJECT_DIR" ]; then
+        print_warning "项目目录已存在，正在更新..."
+        cd $PROJECT_DIR
+        git pull origin main
+    else
+        print_status "克隆项目..."
+        git clone $GITHUB_REPO $PROJECT_DIR
+        cd $PROJECT_DIR
+    fi
     
-    # 安装根目录依赖
-    sudo -u $USER npm install
+    print_success "项目设置完成"
+}
+
+# 部署应用
+deploy_application() {
+    print_status "开始部署应用..."
+    
+    # 停止现有进程（如果存在）
+    if command -v pm2 &> /dev/null; then
+        print_status "停止现有服务..."
+        pm2 stop chatflow 2>/dev/null || true
+        pm2 delete chatflow 2>/dev/null || true
+    fi
+    
+    # 安装项目依赖
+    print_status "安装根目录依赖..."
+    npm install
     
     # 安装服务端依赖
-    cd $INSTALL_DIR/server
-    sudo -u $USER npm install
+    print_status "安装服务端依赖..."
+    cd server && npm install && cd ..
     
-    # 安装客户端依赖并构建
-    cd $INSTALL_DIR/client
-    sudo -u $USER npm install
-    sudo -u $USER npm run build
+    # 安装客户端依赖
+    print_status "安装客户端依赖..."
+    cd client && npm install && cd ..
     
-    print_success "应用依赖安装完成"
-}
-
-# 配置环境
-configure_environment() {
-    print_status "正在配置应用环境..."
+    # 构建前端
+    print_status "构建前端应用..."
+    cd client && npm run build && cd ..
     
-    # 创建服务端环境配置
-    cat > $INSTALL_DIR/server/.env << EOF
-PORT=$API_PORT
-JWT_SECRET=$(openssl rand -base64 32)
+    # 创建环境配置
+    print_status "创建环境配置..."
+    if [ ! -f server/.env ]; then
+        cat > server/.env << EOF
+PORT=5000
+JWT_SECRET=$(openssl rand -base64 32 2>/dev/null || echo "chatflow-$(date +%s)-secret")
 NODE_ENV=production
 EOF
+        print_success "环境配置文件已创建"
+    else
+        print_warning "环境配置文件已存在，跳过创建"
+    fi
     
-    # 设置权限
-    chown $USER:$USER $INSTALL_DIR/server/.env
-    chmod 600 $INSTALL_DIR/server/.env
+    # 安装PM2
+    if ! command -v pm2 &> /dev/null; then
+        print_status "安装 PM2..."
+        npm install -g pm2
+        print_success "PM2 安装完成"
+    fi
     
-    print_success "环境配置完成"
-}
-
-# 配置PM2
-configure_pm2() {
-    print_status "正在配置PM2..."
-    
-    cat > $INSTALL_DIR/ecosystem.config.js << EOF
+    # 创建PM2配置
+    print_status "创建 PM2 配置..."
+    cat > ecosystem.config.js << EOF
 module.exports = {
   apps: [{
-    name: '$SERVICE_NAME',
+    name: 'chatflow',
     script: 'server/index.js',
-    cwd: '$INSTALL_DIR',
-    user: '$USER',
     instances: 1,
     autorestart: true,
     watch: false,
@@ -225,187 +367,72 @@ module.exports = {
   }]
 }
 EOF
-
+    
     # 创建日志目录
-    mkdir -p $INSTALL_DIR/logs
-    chown -R $USER:$USER $INSTALL_DIR/logs
-    chown $USER:$USER $INSTALL_DIR/ecosystem.config.js
-    print_success "PM2配置完成"
+    mkdir -p logs
+    
+    # 启动应用
+    print_status "启动 ChatFlow 应用..."
+    pm2 start ecosystem.config.js
+    pm2 save
+    
+    # 等待服务启动
+    sleep 3
+    
+    print_success "应用部署完成"
 }
 
-# 配置Nginx
-configure_nginx() {
-    print_status "正在配置Nginx..."
-    
-    # 创建Nginx配置目录
-    if [ "$OS" = "debian" ]; then
-        NGINX_SITES_DIR="/etc/nginx/sites-available"
-        NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
-        mkdir -p $NGINX_SITES_DIR $NGINX_ENABLED_DIR
+# 显示结果
+show_result() {
+    # 检查服务状态
+    if pm2 list | grep -q "chatflow.*online"; then
+        print_success "ChatFlow 部署成功！"
+        echo ""
+        echo -e "${GREEN}访问信息:${NC}"
+        echo -e "  应用地址: ${YELLOW}http://localhost:5000${NC}"
+        echo -e "  API接口: ${YELLOW}http://localhost:5000/api${NC}"
+        echo ""
+        echo -e "${GREEN}管理命令:${NC}"
+        echo -e "  查看状态: ${YELLOW}pm2 status${NC}"
+        echo -e "  查看日志: ${YELLOW}pm2 logs chatflow${NC}"
+        echo -e "  重启应用: ${YELLOW}pm2 restart chatflow${NC}"
+        echo -e "  停止应用: ${YELLOW}pm2 stop chatflow${NC}"
+        echo -e "  删除应用: ${YELLOW}pm2 delete chatflow${NC}"
+        echo ""
+        echo -e "${GREEN}快速启动 (下次使用):${NC}"
+        echo -e "  一键启动: ${YELLOW}npm start${NC}"
+        echo -e "  开发模式: ${YELLOW}npm run dev${NC}"
+        echo ""
+        echo -e "${GREEN}默认测试账号:${NC}"
+        echo -e "  用户名: ${YELLOW}test1${NC} / 密码: ${YELLOW}123456${NC}"
+        echo -e "  用户名: ${YELLOW}test2${NC} / 密码: ${YELLOW}123456${NC}"
+        echo ""
+        echo -e "${GREEN}🎉 部署成功！访问 http://localhost:5000 开始使用 ChatFlow！${NC}"
     else
-        NGINX_SITES_DIR="/etc/nginx/conf.d"
-        mkdir -p $NGINX_SITES_DIR
-    fi
-    
-    cat > $NGINX_SITES_DIR/$APP_NAME.conf << EOF
-server {
-    listen 80;
-    server_name _;
-    
-    # 前端静态文件
-    location / {
-        root $INSTALL_DIR/client/build;
-        try_files \$uri \$uri/ /index.html;
-        expires 1d;
-        add_header Cache-Control "public, immutable";
-    }
-    
-    # API代理
-    location /api/ {
-        proxy_pass http://localhost:$API_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-    }
-    
-    # Socket.io
-    location /socket.io/ {
-        proxy_pass http://localhost:$API_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-    
-    # 安全头部
-    add_header X-Frame-Options DENY;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-XSS-Protection "1; mode=block";
-    
-    # 文件上传限制
-    client_max_body_size 10M;
-    
-    # Gzip压缩
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_types
-        text/plain
-        text/css
-        text/xml
-        text/javascript
-        application/javascript
-        application/xml+rss
-        application/json;
-}
-EOF
-
-    # 启用站点
-    if [ "$OS" = "debian" ]; then
-        ln -sf $NGINX_SITES_DIR/$APP_NAME.conf $NGINX_ENABLED_DIR/
-        rm -f $NGINX_ENABLED_DIR/default
-    fi
-    
-    # 测试Nginx配置
-    nginx -t
-    if [ $? -eq 0 ]; then
-        print_success "Nginx配置完成"
-    else
-        print_error "Nginx配置错误"
+        print_error "服务启动失败，请检查日志:"
+        pm2 logs chatflow --lines 20
         exit 1
     fi
-}
-
-# 启动服务
-start_services() {
-    print_status "正在启动服务..."
-    
-    # 启动ChatFlow应用
-    cd $INSTALL_DIR
-    sudo -u $USER pm2 start ecosystem.config.js
-    sudo -u $USER pm2 save
-    
-    # 设置PM2开机自启
-    env PATH=$PATH:/usr/bin pm2 startup systemd -u $USER --hp $INSTALL_DIR
-    
-    # 启动Nginx
-    systemctl enable nginx
-    systemctl start nginx
-    
-    print_success "服务启动完成"
-}
-
-# 显示安装结果
-show_result() {
-    clear
-    print_header
-    
-    # 获取服务器IP
-    SERVER_IP=$(curl -s https://api.ipify.org 2>/dev/null)
-    if [ -z "$SERVER_IP" ]; then
-        SERVER_IP=$(hostname -I | awk '{print $1}' 2>/dev/null)
-    fi
-    if [ -z "$SERVER_IP" ]; then
-        SERVER_IP="localhost"
-    fi
-    
-    print_success "ChatFlow 部署完成！"
-    echo ""
-    echo -e "${CYAN}访问信息:${NC}"
-    echo -e "  Web应用: ${GREEN}http://$SERVER_IP${NC}"
-    echo -e "  API接口: ${GREEN}http://$SERVER_IP:$API_PORT/api${NC}"
-    echo ""
-    echo -e "${CYAN}管理命令:${NC}"
-    echo -e "  查看状态: ${YELLOW}pm2 status${NC}"
-    echo -e "  查看日志: ${YELLOW}pm2 logs $SERVICE_NAME${NC}"
-    echo -e "  重启服务: ${YELLOW}pm2 restart $SERVICE_NAME${NC}"
-    echo -e "  停止服务: ${YELLOW}pm2 stop $SERVICE_NAME${NC}"
-    echo -e "  删除服务: ${YELLOW}pm2 delete $SERVICE_NAME${NC}"
-    echo ""
-    echo -e "${CYAN}服务管理:${NC}"
-    echo -e "  Nginx状态: ${YELLOW}systemctl status nginx${NC}"
-    echo -e "  重启Nginx: ${YELLOW}systemctl restart nginx${NC}"
-    echo ""
-    echo -e "${CYAN}配置文件:${NC}"
-    echo -e "  应用目录: ${YELLOW}$INSTALL_DIR${NC}"
-    echo -e "  环境配置: ${YELLOW}$INSTALL_DIR/server/.env${NC}"
-    echo -e "  Nginx配置: ${YELLOW}$NGINX_SITES_DIR/$APP_NAME.conf${NC}"
-    echo -e "  日志目录: ${YELLOW}$INSTALL_DIR/logs${NC}"
-    echo ""
-    echo -e "${GREEN}默认测试账号:${NC}"
-    echo -e "  用户名: ${YELLOW}test1${NC} / 密码: ${YELLOW}123456${NC}"
-    echo -e "  用户名: ${YELLOW}test2${NC} / 密码: ${YELLOW}123456${NC}"
-    echo ""
-    echo -e "${GREEN}🎉 部署成功！请访问 http://$SERVER_IP 开始使用 ChatFlow！${NC}"
 }
 
 # 主函数
 main() {
     print_header
     
-    print_status "开始部署 ChatFlow..."
+    print_status "开始智能部署 ChatFlow..."
     
-    check_root
-    detect_os
-    install_dependencies
-    create_user
-    download_source
-    install_app_dependencies
-    configure_environment
-    configure_pm2
-    configure_nginx
-    start_services
+    # 检查并安装依赖
+    check_and_install_dependencies
     
+    # 设置项目
+    setup_project
+    
+    # 部署应用
+    deploy_application
+    
+    # 显示结果
     show_result
 }
 
 # 运行主函数
-main "$@"
+main "$@" 
