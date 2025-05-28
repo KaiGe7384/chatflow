@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { User } from '../types';
+import apiService from '../services/api';
 
 interface RegisterProps {
   onRegister: (user: User, token: string) => void;
@@ -40,22 +41,9 @@ const Register: React.FC<RegisterProps> = ({ onRegister }) => {
     setError('');
     
     try {
-      const response = await fetch('http://localhost:5001/api/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ username, password })
-      });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error || '注册失败');
-      }
-      
+      const response = await apiService.register(username, password);
       // 调用注册成功回调
-      onRegister(data.user, data.token);
+      onRegister(response.user, response.token);
     } catch (error) {
       setError(error instanceof Error ? error.message : '注册失败，请重试');
     } finally {

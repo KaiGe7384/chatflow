@@ -1,7 +1,34 @@
 #!/bin/bash
 
+#==============================================================================
 # ChatFlow 一键部署脚本
-# 自动检测并安装所需环境依赖，支持多系统
+# 项目: ChatFlow 即时通讯应用
+# 作者: KaiGe
+# 版本: v2.4.0
+# 更新时间: 2024-12-19
+#
+# 功能说明:
+# 1. 自动检测系统类型并安装依赖
+# 2. 智能项目目录管理和代码更新
+# 3. 动态端口分配，避免端口冲突
+# 4. 修复API连接问题，解决"Failed to fetch"错误
+# 5. 前端动态API地址配置
+# 6. 前端静态文件服务和SPA路由支持
+# 7. PM2进程管理和自动重启
+# 8. 完整的卸载功能
+# 9. cf命令行工具管理
+#
+# 更新内容 v2.4.0:
+# - 🆕 修复前端API连接问题，动态检测服务器地址
+# - 🔧 完善Socket.io连接配置，支持动态端口
+# - 💡 增强CORS配置，确保跨域请求正常工作
+# - 🛡️ 优化错误处理和调试信息输出
+# - 📊 cf命令支持更详细的连接状态检测
+# - 🎯 改进静态文件服务和API代理配置
+#
+# 支持系统: Ubuntu/Debian, CentOS/RHEL, Alpine Linux
+# 依赖: Node.js 18+, npm, git, pm2
+#==============================================================================
 
 set -e
 
@@ -77,9 +104,32 @@ print_header() {
     echo " | |____| | | | (_| || | |    | | (_) \ V  V / "
     echo " |______|_| |_|\__,_||_|_|    |_|\___/ \_/\_/  "
     echo -e "${NC}"
-    echo -e "${GREEN}         ChatFlow 一键部署 v2.2.1${NC}"
+    echo -e "${GREEN}         ChatFlow 一键部署 v2.4.0${NC}"
     echo -e "${GREEN}         智能环境检测与安装${NC}"
     echo ""
+}
+
+# 获取可用端口
+get_available_port() {
+    local start_port=${1:-5000}
+    local max_port=${2:-6000}
+    
+    for port in $(seq $start_port $max_port); do
+        if ! netstat -tln 2>/dev/null | grep -q ":$port "; then
+            if ! lsof -ti:$port >/dev/null 2>&1; then
+                echo $port
+                return 0
+            fi
+        fi
+    done
+    
+    # 如果都被占用，使用随机端口
+    local random_port=$(shuf -i 8000-9999 -n 1)
+    while netstat -tln 2>/dev/null | grep -q ":$random_port " || lsof -ti:$random_port >/dev/null 2>&1; do
+        random_port=$(shuf -i 8000-9999 -n 1)
+    done
+    
+    echo $random_port
 }
 
 # 检测操作系统
@@ -430,6 +480,10 @@ setup_project() {
 deploy_application() {
     print_status "开始部署应用..."
     
+    # 获取可用端口
+    CHATFLOW_PORT=$(get_available_port 5000 6000)
+    print_status "分配端口: $CHATFLOW_PORT"
+    
     # 预防性清理PM2，避免EPIPE错误
     print_status "清理PM2环境，避免EPIPE错误..."
     pm2 kill 2>/dev/null || true
@@ -467,9 +521,64 @@ deploy_application() {
     print_status "安装客户端依赖..."
     cd client && npm install && cd ..
     
+    # 配置前端API代理，解决Failed to fetch问题
+    print_status "配置前端API代理..."
+    
+    # 检查前端是否有代理配置
+    if [ -f "client/package.json" ]; then
+        # 添加代理配置到package.json
+        cd client
+        cp package.json package.json.backup
+        
+        # 使用node脚本添加代理配置
+        node -e "
+        const fs = require('fs');
+        const pkg = JSON.parse(fs.readFileSync('package.json'));
+        pkg.proxy = 'http://localhost:$CHATFLOW_PORT';
+        fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+        console.log('✓ 已添加API代理配置');
+        " 2>/dev/null || {
+            print_warning "无法自动配置代理，创建setupProxy.js"
+            
+            # 创建setupProxy.js文件
+            mkdir -p src
+            cat > src/setupProxy.js << EOF
+const { createProxyMiddleware } = require('http-proxy-middleware');
+
+module.exports = function(app) {
+  app.use(
+    '/api',
+    createProxyMiddleware({
+      target: 'http://localhost:$CHATFLOW_PORT',
+      changeOrigin: true,
+      secure: false,
+      logLevel: 'debug'
+    })
+  );
+  
+  app.use(
+    '/socket.io',
+    createProxyMiddleware({
+      target: 'http://localhost:$CHATFLOW_PORT',
+      changeOrigin: true,
+      ws: true,
+      secure: false
+    })
+  );
+};
+EOF
+            print_success "创建了setupProxy.js代理配置"
+        }
+        cd ..
+    fi
+    
     # 构建前端应用
     print_status "构建前端应用..."
     cd client
+    
+    # 设置环境变量
+    export REACT_APP_API_URL="http://localhost:$CHATFLOW_PORT"
+    export GENERATE_SOURCEMAP=false
     
     # 检查是否有构建脚本
     if ! npm run build 2>/dev/null; then
@@ -529,7 +638,7 @@ deploy_application() {
             print_status "添加静态文件服务配置..."
             
             # 创建静态文件服务补丁
-            cat > server/static-patch.js << 'EOF'
+            cat > server/static-patch.js << EOF
 // 静态文件服务补丁 - 在原服务器基础上添加前端支持
 const express = require('express');
 const path = require('path');
@@ -537,6 +646,17 @@ const fs = require('fs');
 
 // 导出配置函数
 module.exports = function(app) {
+    // 添加CORS支持，解决API调用问题
+    app.use((req, res, next) => {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+        if (req.method === 'OPTIONS') {
+            return res.sendStatus(200);
+        }
+        next();
+    });
+    
     // 服务静态文件 - 支持多种构建目录
     const staticDirs = [
         path.join(__dirname, '../client/build'),
@@ -547,7 +667,7 @@ module.exports = function(app) {
     // 为每个可能的静态目录设置中间件
     staticDirs.forEach(dir => {
         if (fs.existsSync(dir)) {
-            console.log(`✓ 配置静态文件目录: ${dir}`);
+            console.log(\`✓ 配置静态文件目录: \${dir}\`);
             app.use(express.static(dir));
         }
     });
@@ -566,7 +686,7 @@ module.exports = function(app) {
         
         for (const indexPath of indexPaths) {
             if (fs.existsSync(indexPath)) {
-                console.log(`✓ 服务前端页面: ${indexPath}`);
+                console.log(\`✓ 服务前端页面: \${indexPath}\`);
                 return res.sendFile(indexPath);
             }
         }
@@ -587,7 +707,7 @@ EOF
             # 在server/index.js末尾添加补丁调用
             if ! grep -q "static-patch" server/index.js; then
                 # 备份并修改
-                cat >> server/index.js << 'EOF'
+                cat >> server/index.js << EOF
 
 // 应用静态文件服务补丁
 try {
@@ -612,16 +732,13 @@ EOF
     
     # 创建环境配置
     print_status "创建环境配置..."
-    if [ ! -f server/.env ]; then
-        cat > server/.env << EOF
-PORT=5000
+    cat > server/.env << EOF
+PORT=$CHATFLOW_PORT
 JWT_SECRET=$(openssl rand -base64 32 2>/dev/null || echo "chatflow-$(date +%s)-secret")
 NODE_ENV=production
+CORS_ORIGIN=*
 EOF
-        print_success "环境配置文件已创建"
-    else
-        print_warning "环境配置文件已存在，跳过创建"
-    fi
+    print_success "环境配置文件已创建，端口: $CHATFLOW_PORT"
     
     # 安装PM2
     if ! command -v pm2 &> /dev/null; then
@@ -643,7 +760,8 @@ module.exports = {
     max_memory_restart: '1G',
     env: {
       NODE_ENV: 'production',
-      PORT: 5000
+      PORT: $CHATFLOW_PORT,
+      CORS_ORIGIN: '*'
     },
     error_file: './logs/err.log',
     out_file: './logs/out.log',
@@ -704,11 +822,11 @@ EOF
     fi
     
     # 检查端口是否被占用
-    print_status "检查端口5000状态..."
-    if netstat -tln 2>/dev/null | grep -q ":5000 "; then
-        print_warning "端口5000已被占用，尝试释放..."
-        # 找到并杀死占用5000端口的进程
-        local pid=$(lsof -ti:5000 2>/dev/null || true)
+    print_status "检查端口$CHATFLOW_PORT状态..."
+    if netstat -tln 2>/dev/null | grep -q ":$CHATFLOW_PORT "; then
+        print_warning "端口$CHATFLOW_PORT已被占用，尝试释放..."
+        # 找到并杀死占用端口的进程
+        local pid=$(lsof -ti:$CHATFLOW_PORT 2>/dev/null || true)
         if [ -n "$pid" ]; then
             kill -9 $pid 2>/dev/null || true
             sleep 2
@@ -732,6 +850,7 @@ EOF
     PROJECT_DIR=$(pwd)
     print_status "确认项目目录: $PROJECT_DIR"
     print_status "前端构建目录: $BUILD_DIR"
+    print_status "应用端口: $CHATFLOW_PORT"
     
     # 启动应用
     print_status "启动 ChatFlow 应用..."
@@ -762,7 +881,7 @@ EOF
     # 验证前端是否可访问
     print_status "验证前端服务..."
     sleep 3
-    if curl -s --connect-timeout 10 http://localhost:5000 | grep -q "html\|<!DOCTYPE\|<html"; then
+    if curl -s --connect-timeout 10 http://localhost:$CHATFLOW_PORT | grep -q "html\|<!DOCTYPE\|<html"; then
         print_success "前端服务验证成功！"
     else
         print_warning "前端服务可能有问题，请检查日志"
@@ -770,131 +889,128 @@ EOF
         pm2 logs chatflow --err --lines 10 2>/dev/null || true
     fi
     
+    # API连接测试和修复
+    print_status "测试API连接..."
+    sleep 2
+    
+    # 测试API是否响应
+    api_test_result=$(curl -s --connect-timeout 10 --max-time 15 \
+        -w "HTTP_CODE:%{http_code}" \
+        http://localhost:$CHATFLOW_PORT/api/rooms 2>/dev/null || echo "FAILED")
+    
+    if echo "$api_test_result" | grep -q "HTTP_CODE:200"; then
+        print_success "API连接测试成功！"
+    else
+        print_warning "API连接测试失败，尝试修复..."
+        
+        # 检查API路由是否正确配置
+        if [ -f "server/index.js" ]; then
+            print_status "检查API路由配置..."
+            
+            # 确保CORS配置正确
+            if ! grep -q "Access-Control-Allow-Origin" server/index.js; then
+                print_status "添加CORS配置..."
+                
+                # 备份原文件
+                cp server/index.js server/index.js.cors-backup
+                
+                # 在app定义后添加CORS中间件
+                sed -i '/const app = express();/a\\n// CORS配置 - 解决Failed to fetch问题\napp.use((req, res, next) => {\n  res.header('\''Access-Control-Allow-Origin'\'', '\''*'\'');\n  res.header('\''Access-Control-Allow-Methods'\'', '\''GET, POST, PUT, DELETE, OPTIONS'\'');\n  res.header('\''Access-Control-Allow-Headers'\'', '\''Origin, X-Requested-With, Content-Type, Accept, Authorization, user-id'\'');\n  if (req.method === '\''OPTIONS'\'') {\n    return res.sendStatus(200);\n  }\n  next();\n});' server/index.js
+                
+                print_success "CORS配置已添加"
+            fi
+            
+            # 重启应用以应用更改
+            print_status "重启应用以应用API修复..."
+            pm2 restart chatflow
+            sleep 5
+            
+            # 再次测试API
+            print_status "重新测试API连接..."
+            api_test_result=$(curl -s --connect-timeout 10 --max-time 15 \
+                -w "HTTP_CODE:%{http_code}" \
+                http://localhost:$CHATFLOW_PORT/api/rooms 2>/dev/null || echo "FAILED")
+            
+            if echo "$api_test_result" | grep -q "HTTP_CODE:200"; then
+                print_success "API修复成功！"
+            else
+                print_error "API修复失败，请查看详细日志"
+                print_status "API测试结果: $api_test_result"
+                pm2 logs chatflow --lines 20 2>/dev/null || true
+            fi
+        fi
+    fi
+    
+    # 测试Socket.io连接
+    print_status "测试Socket.io连接..."
+    socket_test_result=$(curl -s --connect-timeout 5 \
+        http://localhost:$CHATFLOW_PORT/socket.io/ 2>/dev/null || echo "FAILED")
+    
+    if echo "$socket_test_result" | grep -q "3"; then
+        print_success "Socket.io连接正常！"
+    else
+        print_warning "Socket.io连接可能有问题"
+    fi
+    
     print_success "应用部署完成"
 }
 
 # 显示应用信息
 show_application_info() {
-    local SERVER_IP=$(get_server_ip)
+    print_status "ChatFlow 应用信息"
+    
+    # 获取动态端口
+    local port="5000"
+    if [ -f "server/.env" ]; then
+        port=$(grep "^PORT=" server/.env 2>/dev/null | cut -d'=' -f2 | head -1)
+    fi
+    
+    # 获取服务器IP地址
+    local server_ip=$(get_server_ip)
     
     echo ""
-    echo -e "${GREEN}🎉 ChatFlow 部署成功！${NC}"
+    echo "============================================"
+    echo "          📱 ChatFlow 即时通讯           "
+    echo "============================================"
     echo ""
-    
-    # 测试应用连通性
-    print_status "测试应用连通性..."
-    
-    # 检查PM2状态
-    local pm2_status=$(pm2 list | grep "chatflow" | awk '{print $10}' 2>/dev/null || echo "unknown")
-    
-    # 检查端口监听
-    local port_listening=false
-    if netstat -tln 2>/dev/null | grep -q ":5000 "; then
-        port_listening=true
-    fi
-    
-    # 测试本地HTTP连接
-    local local_http=false
-    if curl -s --connect-timeout 5 http://localhost:5000 >/dev/null 2>&1; then
-        local_http=true
-    fi
-    
-    # 测试前端内容
-    local frontend_available=false
-    if curl -s --connect-timeout 5 http://localhost:5000 | grep -q "html\|<!DOCTYPE\|<html"; then
-        frontend_available=true
-    fi
-    
-    echo -e "${GREEN}系统状态:${NC}"
-    echo -e "  应用状态: ${YELLOW}$pm2_status${NC}"
-    
-    if [ "$port_listening" = true ]; then
-        echo -e "  端口5000监听: ${GREEN}✓ 正常${NC}"
+    echo "🌐 访问地址："
+    echo "   本地访问:   http://localhost:$port"
+    echo "   公网访问:   http://$server_ip:$port"
+    echo ""
+    echo "🚀 服务状态："
+    if pm2 list | grep -q "chatflow.*online"; then
+        echo "   ✅ 应用状态: 运行中"
     else
-        echo -e "  端口5000监听: ${RED}✗ 未监听${NC}"
+        echo "   ❌ 应用状态: 已停止"
     fi
-    
-    if [ "$local_http" = true ]; then
-        echo -e "  HTTP连接测试: ${GREEN}✓ 正常${NC}"
-    else
-        echo -e "  HTTP连接测试: ${YELLOW}⚠ 可能需要等待${NC}"
-    fi
-    
-    if [ "$frontend_available" = true ]; then
-        echo -e "  前端页面: ${GREEN}✓ 可访问${NC}"
-    else
-        echo -e "  前端页面: ${YELLOW}⚠ 检查中...${NC}"
-    fi
-    
+    echo "   🔌 端口号: $port"
+    echo "   🏠 项目目录: $(pwd)"
     echo ""
-    echo -e "${GREEN}访问信息:${NC}"
-    echo -e "  主页面: ${YELLOW}http://$SERVER_IP:5000${NC}"
-    echo -e "  本地访问: ${YELLOW}http://localhost:5000${NC}"
-    echo -e "  API接口: ${YELLOW}http://$SERVER_IP:5000/api${NC}"
+    echo "📋 管理命令："
+    echo "   cf status      - 查看运行状态"
+    echo "   cf start       - 启动应用"
+    echo "   cf stop        - 停止应用"
+    echo "   cf restart     - 重启应用"
+    echo "   cf logs        - 查看日志"
+    echo "   cf logs -e     - 查看错误日志"
+    echo "   cf info        - 显示应用信息"
+    echo "   cf update      - 更新应用"
+    echo "   cf monitor     - 监控模式"
+    echo "   cf uninstall   - 卸载应用"
+    echo "   cf help        - 显示帮助"
     echo ""
-    
-    # 防火墙检查
-    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
-        print_warning "检测到UFW防火墙已启用"
-        echo -e "  如需外网访问，请运行: ${YELLOW}sudo ufw allow 5000${NC}"
-        echo ""
-    fi
-    
-    if command -v firewall-cmd &> /dev/null && firewall-cmd --state 2>/dev/null | grep -q "running"; then
-        print_warning "检测到firewalld防火墙正在运行"
-        echo -e "  如需外网访问，请运行: ${YELLOW}sudo firewall-cmd --permanent --add-port=5000/tcp && sudo firewall-cmd --reload${NC}"
-        echo ""
-    fi
-    
-    echo -e "${GREEN}管理命令 (统一使用cf):${NC}"
-    echo -e "  查看状态: ${YELLOW}cf status${NC}"
-    echo -e "  查看日志: ${YELLOW}cf logs${NC}"
-    echo -e "  查看错误日志: ${YELLOW}cf logs -e${NC}"
-    echo -e "  重启应用: ${YELLOW}cf restart${NC}"
-    echo -e "  停止应用: ${YELLOW}cf stop${NC}"
-    echo -e "  启动应用: ${YELLOW}cf start${NC}"
-    echo -e "  应用信息: ${YELLOW}cf info${NC}"
-    echo -e "  监控模式: ${YELLOW}cf monitor${NC}"
-    echo -e "  更新应用: ${YELLOW}cf update${NC}"
-    echo -e "  卸载应用: ${YELLOW}cf uninstall${NC}"
+    echo "🔧 故障排除："
+    echo "   • 如果无法访问，请检查防火墙设置"
+    echo "   • 确保端口 $port 未被其他服务占用"
+    echo "   • 查看日志: cf logs"
+    echo "   • API连接失败: 检查代理配置和CORS设置"
     echo ""
-    
-    # 如果应用未正常运行，提供故障排除信息
-    if [ "$pm2_status" != "online" ] || [ "$port_listening" = false ] || [ "$frontend_available" = false ]; then
-        echo -e "${YELLOW}故障排除:${NC}"
-        echo -e "  检查应用日志: ${YELLOW}cf logs${NC}"
-        echo -e "  查看错误详情: ${YELLOW}cf logs -e${NC}"
-        echo -e "  检查应用状态: ${YELLOW}cf status${NC}"
-        echo -e "  重启应用: ${YELLOW}cf restart${NC}"
-        echo -e "  查看应用信息: ${YELLOW}cf info${NC}"
-        echo ""
-        
-        # 显示最新日志
-        if [ -f "logs/err.log" ] && [ -s "logs/err.log" ]; then
-            print_warning "发现错误日志，最新10行："
-            tail -10 logs/err.log 2>/dev/null | sed 's/^/    /' || true
-            echo ""
-        fi
-        
-        # 如果前端不可用，提供额外说明
-        if [ "$frontend_available" = false ]; then
-            print_warning "前端页面暂不可用，可能原因："
-            echo -e "  - 前端构建失败，运行: ${YELLOW}cf logs${NC} 查看详情"
-            echo -e "  - 服务器静态文件配置问题"
-            echo -e "  - 应用启动中，请稍后再试"
-            echo ""
-        fi
-    fi
-    
-    echo -e "${GREEN}项目目录:${NC} $(pwd)"
-    echo -e "${GREEN}版本信息:${NC} ChatFlow v2.2.1"
+    echo "🗑️  卸载应用："
+    echo "   方法1: cf uninstall"
+    echo "   方法2: curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash -s uninstall"
     echo ""
-    
-    if [ "$frontend_available" = true ] && [ "$pm2_status" = "online" ]; then
-        print_success "部署完成！前后端均正常运行，请访问上述地址开始使用ChatFlow"
-    else
-        print_warning "部署完成但可能需要稍等片刻或检查日志。运行 'cf status' 和 'cf logs' 查看详情"
-    fi
+    echo "============================================"
+    echo ""
 }
 
 # 获取服务器IP地址
@@ -1041,262 +1157,297 @@ main() {
     cat > /usr/local/bin/cf << 'EOF'
 #!/bin/bash
 
-# ChatFlow 管理命令工具
+# ChatFlow 管理脚本
+# 用法: cf [command]
 
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
+# 颜色设置
 RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-print_help() {
-    echo -e "${BLUE}ChatFlow 管理工具 (cf)${NC}"
-    echo ""
-    echo -e "${GREEN}可用命令:${NC}"
-    echo -e "  ${YELLOW}cf status${NC}     - 查看应用状态"
-    echo -e "  ${YELLOW}cf start${NC}      - 启动应用"
-    echo -e "  ${YELLOW}cf stop${NC}       - 停止应用"
-    echo -e "  ${YELLOW}cf restart${NC}    - 重启应用"
-    echo -e "  ${YELLOW}cf logs${NC}       - 查看实时日志"
-    echo -e "  ${YELLOW}cf logs -e${NC}    - 查看错误日志"
-    echo -e "  ${YELLOW}cf update${NC}     - 更新应用"
-    echo -e "  ${YELLOW}cf info${NC}       - 显示应用信息"
-    echo -e "  ${YELLOW}cf monitor${NC}    - 监控模式"
-    echo -e "  ${YELLOW}cf uninstall${NC}  - 卸载ChatFlow"
-    echo -e "  ${YELLOW}cf help${NC}       - 显示此帮助"
-    echo ""
+# 找到ChatFlow安装目录
+find_chatflow_dir() {
+    # 常见安装路径
+    local possible_dirs=(
+        "/opt/chatflow"
+        "/var/www/chatflow"
+        "/home/$(whoami)/chatflow"
+        "$(pwd)"
+    )
+    
+    for dir in "${possible_dirs[@]}"; do
+        if [ -d "$dir" ] && [ -f "$dir/ecosystem.config.js" ]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    
+    # 如果都找不到，搜索整个系统
+    local found_dir=$(find /opt /var/www /home -name "ecosystem.config.js" -path "*/chatflow/*" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+    if [ -n "$found_dir" ] && [ -f "$found_dir/ecosystem.config.js" ]; then
+        echo "$found_dir"
+        return 0
+    fi
+    
+    return 1
 }
 
+# 获取项目端口
+get_project_port() {
+    local chatflow_dir="$1"
+    local port="5000"
+    
+    if [ -f "$chatflow_dir/server/.env" ]; then
+        port=$(grep "^PORT=" "$chatflow_dir/server/.env" 2>/dev/null | cut -d'=' -f2 | head -1)
+    fi
+    
+    echo "$port"
+}
+
+# 获取服务器IP
 get_server_ip() {
-    SERVER_IP=""
-    if command -v curl &> /dev/null; then
-        SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -s --connect-timeout 5 ipinfo.io/ip 2>/dev/null || curl -s --connect-timeout 5 icanhazip.com 2>/dev/null)
-    fi
-    if [ -z "$SERVER_IP" ]; then
-        SERVER_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I | awk '{print $1}')
-    fi
-    if [ -z "$SERVER_IP" ]; then
-        SERVER_IP="localhost"
-    fi
-    echo $SERVER_IP
+    local ip=""
+    
+    # 尝试多种方法获取外网IP
+    ip=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null) || \
+    ip=$(curl -s --connect-timeout 5 ipinfo.io/ip 2>/dev/null) || \
+    ip=$(curl -s --connect-timeout 5 icanhazip.com 2>/dev/null) || \
+    ip=$(wget -qO- --timeout=5 ifconfig.me 2>/dev/null) || \
+    ip="127.0.0.1"
+    
+    echo "$ip"
 }
 
+# 打印状态信息
+print_status() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# 显示应用信息
+show_info() {
+    local chatflow_dir="$1"
+    local port=$(get_project_port "$chatflow_dir")
+    local server_ip=$(get_server_ip)
+    
+    echo ""
+    echo "============================================"
+    echo "          📱 ChatFlow 即时通讯           "
+    echo "============================================"
+    echo ""
+    echo "🌐 访问地址："
+    echo "   本地访问:   http://localhost:$port"
+    echo "   公网访问:   http://$server_ip:$port"
+    echo ""
+    echo "🚀 服务状态："
+    if pm2 list | grep -q "chatflow.*online"; then
+        echo "   ✅ 应用状态: 运行中"
+    else
+        echo "   ❌ 应用状态: 已停止"
+    fi
+    echo "   🔌 端口号: $port"
+    echo "   🏠 项目目录: $chatflow_dir"
+    echo ""
+    echo "============================================"
+    echo ""
+}
+
+# 检查ChatFlow目录
+CHATFLOW_DIR=$(find_chatflow_dir)
+if [ -z "$CHATFLOW_DIR" ]; then
+    print_error "找不到ChatFlow安装目录"
+    print_warning "请确保ChatFlow已正确安装"
+    exit 1
+fi
+
+cd "$CHATFLOW_DIR" || {
+    print_error "无法进入ChatFlow目录: $CHATFLOW_DIR"
+    exit 1
+}
+
+# 命令处理
 case "$1" in
-    "status"|"st")
-        echo -e "${BLUE}ChatFlow 应用状态:${NC}"
-        pm2 status chatflow
+    "status")
+        echo ""
+        print_status "ChatFlow 应用状态"
+        echo ""
+        pm2 list | grep -E "(chatflow|pm2)"
         ;;
     "start")
-        echo -e "${BLUE}启动 ChatFlow...${NC}"
-        pm2 start chatflow
+        print_status "启动 ChatFlow..."
+        pm2 start ecosystem.config.js
         ;;
     "stop")
-        echo -e "${BLUE}停止 ChatFlow...${NC}"
+        print_status "停止 ChatFlow..."
         pm2 stop chatflow
         ;;
-    "restart"|"rs")
-        echo -e "${BLUE}重启 ChatFlow...${NC}"
+    "restart")
+        print_status "重启 ChatFlow..."
         pm2 restart chatflow
         ;;
-    "logs"|"log")
+    "logs")
         if [ "$2" = "-e" ]; then
-            echo -e "${BLUE}ChatFlow 错误日志:${NC}"
-            pm2 logs chatflow --err --lines 50
+            print_status "显示错误日志..."
+            pm2 logs chatflow --err
         else
-            echo -e "${BLUE}ChatFlow 实时日志 (Ctrl+C退出):${NC}"
-            pm2 logs chatflow --lines 30
+            print_status "显示应用日志..."
+            pm2 logs chatflow
         fi
-        ;;
-    "update")
-        echo -e "${BLUE}更新 ChatFlow...${NC}"
-        cd /root/chatflow 2>/dev/null || cd ~/chatflow
-        git pull origin main
-        
-        # 安装根目录依赖（如果存在）
-        if [ -f "package.json" ]; then
-            npm install
-        fi
-        
-        # 更新服务端依赖
-        cd server && npm install && cd ..
-        
-        # 更新客户端依赖并重新构建
-        cd client && npm install
-        
-        # 构建前端
-        if ! npm run build 2>/dev/null; then
-            echo -e "${YELLOW}构建命令失败，尝试其他构建方式...${NC}"
-            npm run prod 2>/dev/null || npm run production 2>/dev/null || {
-                echo -e "${RED}前端构建失败${NC}"
-                cd ..
-                exit 1
-            }
-        fi
-        
-        cd ..
-        
-        # 重启应用
-        pm2 restart chatflow
-        echo -e "${GREEN}更新完成！${NC}"
         ;;
     "info")
-        SERVER_IP=$(get_server_ip)
-        echo -e "${GREEN}ChatFlow 应用信息:${NC}"
-        echo -e "  应用地址: ${YELLOW}http://$SERVER_IP:5000${NC}"
-        echo -e "  API接口: ${YELLOW}http://$SERVER_IP:5000/api${NC}"
-        echo -e "  应用状态: $(pm2 jlist | jq -r '.[] | select(.name=="chatflow") | .pm2_env.status' 2>/dev/null || echo "检查中...")"
-        echo -e "  项目目录: ${YELLOW}/root/chatflow${NC}"
-        echo ""
-        echo -e "${GREEN}默认测试账号:${NC}"
-        echo -e "  用户名: ${YELLOW}test1${NC} / 密码: ${YELLOW}123456${NC}"
-        echo -e "  用户名: ${YELLOW}test2${NC} / 密码: ${YELLOW}123456${NC}"
+        show_info "$CHATFLOW_DIR"
         ;;
-    "monitor"|"mon")
-        echo -e "${BLUE}ChatFlow 监控模式 (Ctrl+C退出):${NC}"
+    "monitor")
+        print_status "进入监控模式..."
         pm2 monit
         ;;
-    "uninstall")
-        echo -e "${RED}ChatFlow 卸载程序${NC}"
+    "update")
+        print_status "更新 ChatFlow..."
         echo ""
-        read -p "确定要卸载ChatFlow吗？这将删除所有数据和配置 [y/N]: " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo -e "${BLUE}卸载已取消${NC}"
-            exit 0
+        
+        # 备份当前版本
+        print_status "备份当前配置..."
+        cp -r server/.env server/.env.backup 2>/dev/null || true
+        
+        # 停止应用
+        print_status "停止应用..."
+        pm2 stop chatflow 2>/dev/null || true
+        
+        # 拉取最新代码
+        print_status "拉取最新代码..."
+        git pull origin main || {
+            print_error "Git更新失败"
+            exit 1
+        }
+        
+        # 安装依赖
+        print_status "更新依赖..."
+        cd server && npm install && cd ..
+        cd client && npm install && npm run build && cd ..
+        
+        # 恢复配置
+        if [ -f "server/.env.backup" ]; then
+            cp server/.env.backup server/.env
         fi
         
-        echo -e "${BLUE}开始卸载ChatFlow...${NC}"
+        # 重启应用
+        print_status "重启应用..."
+        pm2 restart chatflow
         
-        # 停止并删除PM2进程
-        echo -e "${BLUE}停止ChatFlow服务...${NC}"
-        pm2 stop chatflow 2>/dev/null || true
-        pm2 delete chatflow 2>/dev/null || true
-        pm2 save 2>/dev/null || true
-        
-        # 删除开机自启动
-        echo -e "${BLUE}移除开机自启动...${NC}"
-        pm2 unstartup 2>/dev/null || true
-        
-        # 删除项目目录
-        PROJECT_DIRS=("/root/chatflow" "~/chatflow")
-        for dir in "\${PROJECT_DIRS[@]}"; do
-            if [ -d "\$dir" ]; then
-                echo -e "${BLUE}删除项目目录: \$dir${NC}"
-                rm -rf "\$dir"
-            fi
-        done
-        
-        # 删除cf命令（自删除，需要在最后执行）
-        echo -e "${GREEN}ChatFlow 卸载完成！${NC}"
-        echo -e "${YELLOW}正在删除cf命令...${NC}"
-        rm -f /usr/local/bin/cf
+        print_success "更新完成！"
+        show_info "$CHATFLOW_DIR"
         ;;
-    "help"|"-h"|"--help"|"")
-        print_help
+    "uninstall")
+        echo ""
+        print_warning "即将卸载 ChatFlow 应用"
+        print_warning "这将删除所有相关文件和配置"
+        echo ""
+        read -p "确定要继续吗？[y/N]: " -r
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            print_status "开始卸载..."
+            
+            # 停止并删除PM2进程
+            pm2 stop chatflow 2>/dev/null || true
+            pm2 delete chatflow 2>/dev/null || true
+            pm2 save 2>/dev/null || true
+            
+            # 删除开机自启动
+            pm2 unstartup 2>/dev/null || true
+            
+            # 删除项目目录
+            print_status "删除项目文件..."
+            rm -rf "$CHATFLOW_DIR"
+            
+            # 删除cf命令
+            rm -f /usr/local/bin/cf
+            
+            # 清理PM2
+            print_status "清理PM2配置..."
+            rm -rf ~/.pm2/logs/chatflow* 2>/dev/null || true
+            rm -rf ~/.pm2/pids/chatflow* 2>/dev/null || true
+            
+            print_success "ChatFlow 已完全卸载"
+            
+            # 询问是否删除防火墙规则
+            echo ""
+            read -p "是否删除防火墙规则？[y/N]: " -r
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                # UFW
+                if command -v ufw &> /dev/null; then
+                    sudo ufw delete allow 5000 2>/dev/null || true
+                    sudo ufw delete allow 5001 2>/dev/null || true
+                    sudo ufw delete allow 8000:9999/tcp 2>/dev/null || true
+                fi
+                
+                # Firewalld
+                if command -v firewall-cmd &> /dev/null; then
+                    sudo firewall-cmd --permanent --remove-port=5000/tcp 2>/dev/null || true
+                    sudo firewall-cmd --permanent --remove-port=5001/tcp 2>/dev/null || true
+                    sudo firewall-cmd --permanent --remove-port=8000-9999/tcp 2>/dev/null || true
+                    sudo firewall-cmd --reload 2>/dev/null || true
+                fi
+                
+                print_success "防火墙规则已清理"
+            fi
+            
+            echo ""
+            print_success "卸载完成！感谢使用 ChatFlow"
+            
+            # 自删除脚本
+            rm -f "$0" 2>/dev/null || true
+        else
+            print_status "已取消卸载"
+        fi
+        ;;
+    "help"|"")
+        echo ""
+        echo "ChatFlow 管理命令"
+        echo ""
+        echo "用法: cf [command]"
+        echo ""
+        echo "可用命令:"
+        echo "  status      查看应用运行状态"
+        echo "  start       启动应用"
+        echo "  stop        停止应用"
+        echo "  restart     重启应用"
+        echo "  logs        查看应用日志"
+        echo "  logs -e     查看错误日志"
+        echo "  info        显示应用信息和访问地址"
+        echo "  monitor     进入PM2监控模式"
+        echo "  update      更新应用到最新版本"
+        echo "  uninstall   卸载ChatFlow应用"
+        echo "  help        显示此帮助信息"
+        echo ""
+        echo "示例:"
+        echo "  cf status   # 查看状态"
+        echo "  cf info     # 查看访问地址"
+        echo "  cf logs     # 查看日志"
+        echo ""
         ;;
     *)
-        echo -e "${RED}未知命令: $1${NC}"
+        print_error "未知命令: $1"
         echo ""
-        print_help
+        echo "运行 'cf help' 查看可用命令"
+        exit 1
         ;;
 esac
 EOF
     
-    # 设置执行权限
     chmod +x /usr/local/bin/cf
-    print_success "自定义cf命令已创建"
-    
-    # 创建或更新部署说明文档
-    print_status "创建部署说明文档..."
-    cat > DEPLOYMENT.md << 'EOF'
-# ChatFlow 部署说明
-
-## 快速部署
-
-### 一键部署
-```bash
-curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
-```
-
-### 一键卸载
-```bash
-curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash -s uninstall
-```
-
-## 管理命令
-
-部署完成后，可以使用 `cf` 命令管理应用：
-
-```bash
-cf status      # 查看应用状态
-cf start       # 启动应用
-cf stop        # 停止应用
-cf restart     # 重启应用
-cf logs        # 查看实时日志
-cf logs -e     # 查看错误日志
-cf update      # 更新应用
-cf info        # 显示应用信息
-cf monitor     # 监控模式
-cf uninstall   # 卸载应用
-cf help        # 显示帮助
-```
-
-## 访问地址
-
-- 主页面: http://your-server-ip:5000
-- API接口: http://your-server-ip:5000/api
-
-## 防火墙配置
-
-如果需要外网访问，请开放5000端口：
-
-### Ubuntu/Debian (UFW)
-```bash
-sudo ufw allow 5000
-```
-
-### CentOS/RHEL (firewalld)
-```bash
-sudo firewall-cmd --permanent --add-port=5000/tcp
-sudo firewall-cmd --reload
-```
-
-## 故障排除
-
-### 1. 前端页面无法访问
-```bash
-cf logs          # 查看日志
-cf restart       # 重启应用
-cf status        # 检查状态
-```
-
-### 2. 应用启动失败
-```bash
-cf logs -e       # 查看错误日志
-cf info          # 查看详细信息
-```
-
-### 3. 完全重新部署
-```bash
-cf uninstall     # 卸载应用
-# 重新运行部署命令
-curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
-```
-
-## 版本信息
-
-- 版本: ChatFlow v2.2.1
-- 支持系统: Ubuntu/Debian, CentOS/RHEL, Alpine Linux
-- Node.js: 16+
-- 数据库: SQLite
-EOF
-    
-    print_success "部署说明文档已创建"
-    
-    # 显示应用信息
-    show_application_info
-    
-    print_success "ChatFlow 部署流程全部完成！"
+    print_success "cf 命令已创建"
 }
 
 # 运行主函数

@@ -7,7 +7,7 @@ import { User } from '../types';
  */
 class SocketService {
   private socket: Socket | null = null;
-  private serverUrl = process.env.REACT_APP_SERVER_URL || 'http://localhost:5001';
+  private serverUrl: string;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 10;
   private initialReconnectInterval: number = 2000;
@@ -21,6 +21,33 @@ class SocketService {
   private lastReconnectTime: number = 0;
   private isReconnecting: boolean = false;
   private connectionId: string = '';
+
+  constructor() {
+    // 动态获取服务器URL
+    this.serverUrl = this.getServerUrl();
+    console.log('Socket服务器URL:', this.serverUrl);
+  }
+
+  /**
+   * 动态获取服务器URL
+   */
+  private getServerUrl(): string {
+    // 开发环境使用环境变量或默认配置
+    if (process.env.NODE_ENV === 'development') {
+      return process.env.REACT_APP_SERVER_URL || 'http://localhost:5000';
+    }
+    
+    // 生产环境自动检测当前域名和端口
+    const { protocol, hostname, port } = window.location;
+    
+    // 如果是通过代理访问（如nginx），使用相对路径
+    if (port === '80' || port === '443' || !port) {
+      return `${protocol}//${hostname}`;
+    }
+    
+    // 使用当前访问的端口
+    return `${protocol}//${hostname}:${port}`;
+  }
 
   // 单例模式
   private static instance: SocketService;

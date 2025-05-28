@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { User } from '../types';
+import apiService from '../services/api';
 
 interface LoginProps {
   onLogin: (user: User, token: string) => void;
@@ -24,22 +25,9 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setError('');
     
     try {
-      const response = await fetch('http://localhost:5001/api/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ username, password })
-      });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error || '登录失败');
-      }
-      
+      const response = await apiService.login(username, password);
       // 调用登录回调
-      onLogin(data.user, data.token);
+      onLogin(response.user, response.token);
     } catch (error) {
       setError(error instanceof Error ? error.message : '登录失败，请重试');
     } finally {

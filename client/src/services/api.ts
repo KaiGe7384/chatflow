@@ -1,6 +1,29 @@
 import { AuthResponse, Room, Message, PrivateMessage, User } from '../types';
 
-const API_BASE_URL = 'http://localhost:5001/api';
+// 动态获取API基础URL
+const getApiBaseUrl = () => {
+  // 开发环境使用环境变量或默认配置
+  if (process.env.NODE_ENV === 'development') {
+    return process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+  }
+  
+  // 生产环境自动检测当前域名和端口
+  const { protocol, hostname, port } = window.location;
+  const currentPort = port || (protocol === 'https:' ? '443' : '80');
+  
+  // 如果是通过代理访问（如nginx），使用相对路径
+  if (port === '80' || port === '443' || !port) {
+    return `${protocol}//${hostname}/api`;
+  }
+  
+  // 使用当前访问的端口
+  return `${protocol}//${hostname}:${currentPort}/api`;
+};
+
+const API_BASE_URL = getApiBaseUrl();
+
+// 在控制台输出API地址，便于调试
+console.log('API Base URL:', API_BASE_URL);
 
 class ApiService {
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -29,47 +52,88 @@ class ApiService {
 
     try {
       const response = await fetch(url, config);
+      
+      // 检查响应是否为有效的JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('application/json')) {
+        throw new Error(`服务器返回非JSON响应: ${response.status} ${response.statusText}`);
+      }
+      
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || '请求失败');
+        throw new Error(data.error || `请求失败: ${response.status} ${response.statusText}`);
       }
 
       return data;
     } catch (error) {
       console.error('API请求错误:', error);
+      
+      // 提供更详细的错误信息
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        throw new Error(`无法连接到服务器 (${API_BASE_URL})，请检查网络连接或服务器状态`);
+      }
+      
       throw error;
     }
   }
 
   async register(username: string, password: string): Promise<AuthResponse> {
-    const response = await fetch(`${API_BASE_URL}/register`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || '注册失败');
+    try {
+      const response = await fetch(`${API_BASE_URL}/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+      });
+      
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('application/json')) {
+        throw new Error(`服务器返回非JSON响应: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || '注册失败');
+      }
+      return data;
+    } catch (error) {
+      console.error('注册请求错误:', error);
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        throw new Error(`无法连接到服务器，请检查网络连接或服务器状态`);
+      }
+      throw error;
     }
-    return data;
   }
 
   async login(username: string, password: string): Promise<AuthResponse> {
-    const response = await fetch(`${API_BASE_URL}/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || '登录失败');
+    try {
+      const response = await fetch(`${API_BASE_URL}/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+      });
+      
+      const contentType = response.headers.get('content-type');
+      if (!contentType?.includes('application/json')) {
+        throw new Error(`服务器返回非JSON响应: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || '登录失败');
+      }
+      return data;
+    } catch (error) {
+      console.error('登录请求错误:', error);
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        throw new Error(`无法连接到服务器，请检查网络连接或服务器状态`);
+      }
+      throw error;
     }
-    return data;
   }
 
   async getRooms(): Promise<Room[]> {
