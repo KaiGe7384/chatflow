@@ -456,6 +456,44 @@ EOF
     # 创建日志目录
     mkdir -p logs
     
+    # 创建package.json的start脚本（如果不存在）
+    if [ -f package.json ]; then
+        print_status "更新 package.json 脚本..."
+        # 备份原文件
+        cp package.json package.json.bak
+        # 使用node添加start脚本
+        node -e "
+        const fs = require('fs');
+        const pkg = JSON.parse(fs.readFileSync('package.json'));
+        pkg.scripts = pkg.scripts || {};
+        pkg.scripts.start = 'pm2 start ecosystem.config.js';
+        pkg.scripts.dev = 'cd server && npm run dev';
+        pkg.scripts.stop = 'pm2 stop chatflow';
+        pkg.scripts.restart = 'pm2 restart chatflow';
+        pkg.scripts.logs = 'pm2 logs chatflow';
+        fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+        " 2>/dev/null || true
+    else
+        print_status "创建 package.json..."
+        cat > package.json << EOF
+{
+  \"name\": \"chatflow\",
+  \"version\": \"1.0.0\",
+  \"description\": \"ChatFlow 即时通讯应用\",
+  \"scripts\": {
+    \"start\": \"pm2 start ecosystem.config.js\",
+    \"dev\": \"cd server && npm run dev\",
+    \"stop\": \"pm2 stop chatflow\",
+    \"restart\": \"pm2 restart chatflow\",
+    \"logs\": \"pm2 logs chatflow\"
+  },
+  \"keywords\": [\"chat\", \"socket.io\", \"react\"],
+  \"author\": \"KaiGe\",
+  \"license\": \"MIT\"
+}
+EOF
+    fi
+    
     # 启动应用
     print_status "启动 ChatFlow 应用..."
     pm2 start ecosystem.config.js
@@ -472,27 +510,169 @@ show_result() {
     # 检查服务状态
     if pm2 list | grep -q "chatflow.*online"; then
         print_success "ChatFlow 部署成功！"
+        
+        # 获取服务器IP地址
+        print_status "获取服务器IP地址..."
+        SERVER_IP=""
+        
+        # 尝试多种方法获取外网IP
+        if command -v curl &> /dev/null; then
+            SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null || curl -s icanhazip.com 2>/dev/null)
+        fi
+        
+        # 如果获取外网IP失败，获取内网IP
+        if [ -z "$SERVER_IP" ]; then
+            SERVER_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I | awk '{print $1}')
+        fi
+        
+        # 如果还是获取不到，使用localhost
+        if [ -z "$SERVER_IP" ]; then
+            SERVER_IP="localhost"
+        fi
+        
+        # 设置PM2开机自启动
+        print_status "设置开机自启动..."
+        pm2 startup systemd -u root --hp /root 2>/dev/null || pm2 startup 2>/dev/null || true
+        pm2 save
+        
+        # 创建自定义cf命令管理工具
+        print_status "创建自定义cf管理命令..."
+        cat > /usr/local/bin/cf << 'EOF'
+#!/bin/bash
+
+# ChatFlow 管理命令工具
+
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+print_help() {
+    echo -e "${BLUE}ChatFlow 管理工具 (cf)${NC}"
+    echo ""
+    echo -e "${GREEN}可用命令:${NC}"
+    echo -e "  ${YELLOW}cf status${NC}     - 查看应用状态"
+    echo -e "  ${YELLOW}cf start${NC}      - 启动应用"
+    echo -e "  ${YELLOW}cf stop${NC}       - 停止应用"
+    echo -e "  ${YELLOW}cf restart${NC}    - 重启应用"
+    echo -e "  ${YELLOW}cf logs${NC}       - 查看实时日志"
+    echo -e "  ${YELLOW}cf logs -e${NC}    - 查看错误日志"
+    echo -e "  ${YELLOW}cf update${NC}     - 更新应用"
+    echo -e "  ${YELLOW}cf info${NC}       - 显示应用信息"
+    echo -e "  ${YELLOW}cf monitor${NC}    - 监控模式"
+    echo -e "  ${YELLOW}cf help${NC}       - 显示此帮助"
+    echo ""
+}
+
+get_server_ip() {
+    SERVER_IP=""
+    if command -v curl &> /dev/null; then
+        SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ipinfo.io/ip 2>/dev/null)
+    fi
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(ip route get 1 2>/dev/null | awk '{print $7; exit}' || hostname -I | awk '{print $1}')
+    fi
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP="localhost"
+    fi
+    echo $SERVER_IP
+}
+
+case "$1" in
+    "status"|"st")
+        echo -e "${BLUE}ChatFlow 应用状态:${NC}"
+        pm2 status chatflow
+        ;;
+    "start")
+        echo -e "${BLUE}启动 ChatFlow...${NC}"
+        pm2 start chatflow
+        ;;
+    "stop")
+        echo -e "${BLUE}停止 ChatFlow...${NC}"
+        pm2 stop chatflow
+        ;;
+    "restart"|"rs")
+        echo -e "${BLUE}重启 ChatFlow...${NC}"
+        pm2 restart chatflow
+        ;;
+    "logs"|"log")
+        if [ "$2" = "-e" ]; then
+            echo -e "${BLUE}ChatFlow 错误日志:${NC}"
+            pm2 logs chatflow --err --lines 50
+        else
+            echo -e "${BLUE}ChatFlow 实时日志 (Ctrl+C退出):${NC}"
+            pm2 logs chatflow --lines 30
+        fi
+        ;;
+    "update")
+        echo -e "${BLUE}更新 ChatFlow...${NC}"
+        cd /root/chatflow 2>/dev/null || cd ~/chatflow
+        git pull origin main
+        npm install
+        cd client && npm install && npm run build && cd ..
+        pm2 restart chatflow
+        echo -e "${GREEN}更新完成！${NC}"
+        ;;
+    "info")
+        SERVER_IP=$(get_server_ip)
+        echo -e "${GREEN}ChatFlow 应用信息:${NC}"
+        echo -e "  应用地址: ${YELLOW}http://$SERVER_IP:5000${NC}"
+        echo -e "  API接口: ${YELLOW}http://$SERVER_IP:5000/api${NC}"
+        echo -e "  应用状态: $(pm2 jlist | jq -r '.[] | select(.name=="chatflow") | .pm2_env.status' 2>/dev/null || echo "检查中...")"
+        echo -e "  项目目录: ${YELLOW}/root/chatflow${NC}"
+        echo ""
+        echo -e "${GREEN}默认测试账号:${NC}"
+        echo -e "  用户名: ${YELLOW}test1${NC} / 密码: ${YELLOW}123456${NC}"
+        echo -e "  用户名: ${YELLOW}test2${NC} / 密码: ${YELLOW}123456${NC}"
+        ;;
+    "monitor"|"mon")
+        echo -e "${BLUE}ChatFlow 监控模式 (Ctrl+C退出):${NC}"
+        pm2 monit
+        ;;
+    "help"|"-h"|"--help"|"")
+        print_help
+        ;;
+    *)
+        echo -e "${RED}未知命令: $1${NC}"
+        echo ""
+        print_help
+        ;;
+esac
+EOF
+        
+        # 设置执行权限
+        chmod +x /usr/local/bin/cf
+        
+        print_success "自定义cf命令已创建"
+        
+        echo ""
+        echo -e "${GREEN}🎉 ChatFlow 部署配置完成！${NC}"
         echo ""
         echo -e "${GREEN}访问信息:${NC}"
-        echo -e "  应用地址: ${YELLOW}http://localhost:5000${NC}"
-        echo -e "  API接口: ${YELLOW}http://localhost:5000/api${NC}"
+        echo -e "  应用地址: ${YELLOW}http://$SERVER_IP:5000${NC}"
+        echo -e "  API接口: ${YELLOW}http://$SERVER_IP:5000/api${NC}"
         echo ""
-        echo -e "${GREEN}管理命令:${NC}"
-        echo -e "  查看状态: ${YELLOW}pm2 status${NC}"
-        echo -e "  查看日志: ${YELLOW}pm2 logs chatflow${NC}"
-        echo -e "  重启应用: ${YELLOW}pm2 restart chatflow${NC}"
-        echo -e "  停止应用: ${YELLOW}pm2 stop chatflow${NC}"
-        echo -e "  删除应用: ${YELLOW}pm2 delete chatflow${NC}"
+        echo -e "${GREEN}自定义管理命令 (cf):${NC}"
+        echo -e "  查看状态: ${YELLOW}cf status${NC}"
+        echo -e "  查看日志: ${YELLOW}cf logs${NC}"
+        echo -e "  重启应用: ${YELLOW}cf restart${NC}"
+        echo -e "  应用信息: ${YELLOW}cf info${NC}"
+        echo -e "  更多命令: ${YELLOW}cf help${NC}"
         echo ""
-        echo -e "${GREEN}快速启动 (下次使用):${NC}"
-        echo -e "  一键启动: ${YELLOW}npm start${NC}"
-        echo -e "  开发模式: ${YELLOW}npm run dev${NC}"
+        echo -e "${GREEN}开机自启动: ${YELLOW}已设置 ✓${NC}"
         echo ""
         echo -e "${GREEN}默认测试账号:${NC}"
         echo -e "  用户名: ${YELLOW}test1${NC} / 密码: ${YELLOW}123456${NC}"
         echo -e "  用户名: ${YELLOW}test2${NC} / 密码: ${YELLOW}123456${NC}"
         echo ""
-        echo -e "${GREEN}🎉 部署成功！访问 http://localhost:5000 开始使用 ChatFlow！${NC}"
+        echo -e "${GREEN}🚀 现在可以通过 http://$SERVER_IP:5000 访问您的 ChatFlow 应用！${NC}"
+        
+        # 测试cf命令
+        echo ""
+        print_status "测试cf命令..."
+        /usr/local/bin/cf info
+        
     else
         print_error "服务启动失败，请检查日志:"
         pm2 logs chatflow --lines 20

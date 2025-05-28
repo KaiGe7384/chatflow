@@ -19,6 +19,13 @@
 - 🔔 **消息通知** - 浏览器原生通知支持
 - ⚡ **打字指示器** - 实时显示用户输入状态
 - 🔐 **用户认证** - 安全的登录注册系统
+- 🚀 **一键部署** - 智能检测系统环境，自动安装依赖
+- 📊 **消息历史** - 完整的聊天记录存储
+- 🎨 **现代UI** - 基于 React 的现代化界面
+- ⚡ **高性能** - SQLite 数据库，轻量级部署
+- 🖥️ **自动IP检测** - 自动获取服务器IP地址
+- 🔄 **开机自启** - PM2 守护进程，服务器重启自动启动
+- 🛠️ **自定义命令** - cf 命令工具，简化管理操作
 
 ## 🏗️ 技术栈
 
@@ -97,35 +104,31 @@ chmod +x check-deployment.sh
 ### 一键部署命令
 
 ```bash
-# 推荐方式
+# 推荐方式（自动获取最新版本）
 curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
 
-# 备选方式（如果CDN缓存未更新）
+# 备选方式
 wget https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh
 chmod +x deploy.sh
 sudo ./deploy.sh
 ```
 
-### 已修复的问题
+### 系统要求
 
-✅ **Node.js 安装冲突**：自动清理冲突包（libnode-dev等）  
-✅ **dpkg错误**：智能处理包依赖冲突  
-✅ **安装弹窗**：非交互式模式，无需手动确认  
-✅ **权限问题**：自动检测root权限  
-✅ **多系统支持**：Ubuntu/Debian、CentOS、Alpine Linux
+- **操作系统**: Ubuntu 18.04+, Debian 9+, CentOS 7+, Alpine Linux
+- **内存**: 最低 512MB RAM（推荐 1GB+）
+- **存储**: 最低 2GB 可用空间
+- **网络**: 需要访问外网下载依赖
 
-### 常见问题解决
+### 部署特性
 
-**如果遇到Node.js冲突错误：**
-```bash
-# 手动清理冲突包
-sudo apt remove --purge -y nodejs npm libnode-dev libnode72 node-gyp
-sudo apt autoremove -y
-sudo apt autoclean
-
-# 然后重新运行部署脚本
-curl -sSL https://raw.githubusercontent.com/KaiGe7384/chatflow/main/deploy.sh | bash
-```
+✅ **智能系统检测** - 自动识别 Ubuntu/Debian、CentOS/RHEL、Alpine Linux  
+✅ **自动依赖安装** - Node.js 18+、npm、Git、PM2  
+✅ **项目自动管理** - 克隆/更新代码，构建前端  
+✅ **环境自动配置** - JWT密钥、数据库、PM2配置  
+✅ **开机自启动** - 系统重启后自动启动服务  
+✅ **IP自动检测** - 自动获取服务器外网/内网IP  
+✅ **自定义命令** - cf工具简化管理操作  
 
 ## 🎯 使用方法
 
@@ -217,6 +220,37 @@ pm2 delete chatflow  # 删除应用
 systemctl status nginx  # 查看Nginx状态
 systemctl restart nginx # 重启Nginx
 nginx -t                # 测试配置文件
+```
+
+### CF 自定义命令工具
+
+部署完成后，可以使用 `cf` 命令进行应用管理：
+
+```bash
+# 基础操作
+cf status        # 查看应用状态
+cf start         # 启动应用
+cf stop          # 停止应用  
+cf restart       # 重启应用
+cf logs          # 查看实时日志
+cf logs -e       # 查看错误日志
+
+# 高级功能
+cf info          # 显示应用信息和访问地址
+cf update        # 更新应用到最新版本
+cf monitor       # 进入监控模式
+cf help          # 显示帮助信息
+```
+
+### NPM 脚本命令
+
+```bash
+# 进入项目目录后使用
+npm start        # 启动应用
+npm run dev      # 开发模式
+npm stop         # 停止应用
+npm restart      # 重启应用
+npm run logs     # 查看日志
 ```
 
 ## 🤝 贡献
