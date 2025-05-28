@@ -398,17 +398,29 @@ check_dependencies() {
 
 # 克隆或更新项目
 setup_project() {
-    PROJECT_DIR="chatflow"
     GITHUB_REPO="https://github.com/KaiGe7384/chatflow.git"
     
-    if [ -d "$PROJECT_DIR" ]; then
+    # 检查是否已经在项目目录中
+    if [ -f "package.json" ] && [ -d "client" ] && [ -d "server" ]; then
+        print_status "检测到已在ChatFlow项目目录中，正在更新..."
+        git pull origin main || {
+            print_warning "Git更新失败，可能是非Git目录或网络问题，继续部署..."
+        }
+        print_success "项目设置完成"
+        return 0
+    fi
+    
+    # 检查是否存在chatflow子目录
+    if [ -d "chatflow" ]; then
         print_warning "项目目录已存在，正在更新..."
-        cd $PROJECT_DIR
-        git pull origin main
+        cd chatflow
+        git pull origin main || {
+            print_warning "Git更新失败，可能是网络问题，继续部署..."
+        }
     else
         print_status "克隆项目..."
-        git clone $GITHUB_REPO $PROJECT_DIR
-        cd $PROJECT_DIR
+        git clone $GITHUB_REPO chatflow
+        cd chatflow
     fi
     
     print_success "项目设置完成"
@@ -554,6 +566,17 @@ EOF
             sleep 2
         fi
     fi
+    
+    # 确认当前在正确的项目目录中
+    if [ ! -f "package.json" ] || [ ! -d "client" ] || [ ! -d "server" ]; then
+        print_error "项目结构不完整，请检查克隆是否成功"
+        print_status "当前目录内容："
+        ls -la
+        exit 1
+    fi
+    
+    PROJECT_DIR=$(pwd)
+    print_status "确认项目目录: $PROJECT_DIR"
     
     # 启动应用
     print_status "启动 ChatFlow 应用..."
@@ -795,17 +818,16 @@ main() {
     # 克隆或更新项目
     setup_project
     
-    # 进入项目目录（修复路径问题）
-    if [ -d "chatflow" ]; then
-        cd chatflow
-        PROJECT_DIR=$(pwd)
-        print_status "进入项目目录: $PROJECT_DIR"
-    else
-        print_error "项目目录不存在，克隆可能失败"
+    # 确认当前在正确的项目目录中
+    if [ ! -f "package.json" ] || [ ! -d "client" ] || [ ! -d "server" ]; then
+        print_error "项目结构不完整，请检查克隆是否成功"
         print_status "当前目录内容："
         ls -la
         exit 1
     fi
+    
+    PROJECT_DIR=$(pwd)
+    print_status "确认项目目录: $PROJECT_DIR"
     
     # 部署应用
     deploy_application
