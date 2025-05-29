@@ -480,9 +480,9 @@ setup_project() {
 deploy_application() {
     print_status "开始部署应用..."
     
-    # 获取可用端口
-    CHATFLOW_PORT=$(get_available_port 5000 6000)
-    print_status "分配端口: $CHATFLOW_PORT"
+    # 固定使用5000端口
+    CHATFLOW_PORT=5000
+    print_status "使用固定端口: $CHATFLOW_PORT"
     
     # 预防性清理PM2，避免EPIPE错误
     print_status "清理PM2环境，避免EPIPE错误..."
