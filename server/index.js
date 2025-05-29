@@ -1079,7 +1079,7 @@ io.on('connection', (socket) => {
             }
           }
         );
-  });
+      });
 
       // 发送未读消息数给用户
       const socketId = Array.from(onlineUsers.values())
@@ -1195,4 +1195,52 @@ const PORT = process.env.PORT || 5001;
 server.listen(PORT, () => {
   console.log(`🚀 服务器运行在端口 ${PORT}`);
   console.log(`📡 Socket.io 服务器已启动`);
+});
+
+// 错误处理
+server.on('error', (error) => {
+  console.error('服务器错误:', error);
+  if (error.code === 'EADDRINUSE') {
+    console.error(`端口 ${PORT} 已被占用，请尝试其他端口`);
+  }
+});
+
+// 进程错误处理
+process.on('uncaughtException', (error) => {
+  console.error('未捕获的异常:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('未处理的Promise拒绝:', reason);
+});
+
+// 优雅关闭
+process.on('SIGINT', () => {
+  console.log('收到SIGINT信号，正在关闭服务器...');
+  server.close(() => {
+    console.log('服务器已关闭');
+    db.close((err) => {
+      if (err) {
+        console.error('关闭数据库连接时出错:', err);
+      } else {
+        console.log('数据库连接已关闭');
+      }
+      process.exit(0);
+    });
+  });
+});
+
+process.on('SIGTERM', () => {
+  console.log('收到SIGTERM信号，正在关闭服务器...');
+  server.close(() => {
+    console.log('服务器已关闭');
+    db.close((err) => {
+      if (err) {
+        console.error('关闭数据库连接时出错:', err);
+      } else {
+        console.log('数据库连接已关闭');
+      }
+      process.exit(0);
+    });
+  });
 }); 
