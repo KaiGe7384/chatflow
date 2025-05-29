@@ -6,6 +6,7 @@ echo "快速修复ChatFlow部署..."
 echo "停止旧进程..."
 pkill -f "node.*server" || true
 pkill -f "npm.*start" || true
+pkill -f "python.*http.server" || true
 
 # 进入项目目录
 cd /root/chatflow || exit 1
@@ -19,8 +20,11 @@ echo "安装服务器依赖..."
 cd server
 npm install --production
 
+# 修改服务器端口为5000
+export PORT=5000
+
 # 启动服务器
-echo "启动服务器..."
+echo "启动服务器在端口5000..."
 nohup node index.js > ../server.log 2>&1 &
 
 # 等待启动
@@ -29,8 +33,10 @@ sleep 3
 # 检查进程
 if pgrep -f "node.*index.js" > /dev/null; then
     echo "✅ 服务器启动成功!"
-    echo "📡 服务运行在端口 5001"
+    echo "📡 服务运行在端口 5000"
+    echo "🌐 包含前端静态文件服务"
     echo "📄 日志文件: /root/chatflow/server.log"
+    echo "🔗 访问地址: http://154.84.59.76:5000"
 else
     echo "❌ 服务器启动失败!"
     echo "查看日志:"
