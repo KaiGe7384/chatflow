@@ -789,6 +789,18 @@ app.get('/api/admin/recent-messages', (req, res) => {
   });
 });
 
+// 静态文件服务 - 提供前端构建文件
+const clientBuildPath = path.join(__dirname, '../client/build');
+app.use(express.static(clientBuildPath));
+
+// 处理所有非API路由，返回React应用（SPA路由支持）
+app.get('*', (req, res) => {
+  // 确保不是API路由或Socket.io路由
+  if (!req.path.startsWith('/api/') && !req.path.startsWith('/socket.io/')) {
+    res.sendFile(path.join(clientBuildPath, 'index.html'));
+  }
+});
+
 // Socket连接处理
 io.on('connection', (socket) => {
   console.log(`新的Socket连接: ${socket.id}`);
